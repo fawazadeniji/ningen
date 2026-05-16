@@ -22,13 +22,12 @@ services:
       context: ./embedder_service
     environment:
       - MODEL_DIR=/models
-    volumes:
-      - model_cache:/models
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 60s
 
   # One-shot ETL worker: runs, ingests 100k items, and exits.
   etl_worker:
@@ -72,4 +71,3 @@ services:
 
 volumes:
   pgdata:
-  model_cache:

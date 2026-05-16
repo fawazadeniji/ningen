@@ -77,8 +77,8 @@ func run(ctx context.Context) error {
 	embedder := embed.NewSidecarEmbedder(embedderURL)
 
 	sources := []ingest.Source{
-		ingest.NewYelpCSV("https://huggingface.co/datasets/Yelp/yelp_review_full/resolve/main/yelp_review_full.csv"),
-		ingest.NewAmazonGzJsonl("https://snap.stanford.edu/data/amazon/productGraph/categoryFiles/reviews_All_Beauty.json.gz"),
+		ingest.NewAmazonGzJsonl("https://snap.stanford.edu/data/amazon/productGraph/categoryFiles/reviews_Electronics.json.gz"),
+		ingest.NewAmazonGzJsonl("https://snap.stanford.edu/data/amazon/productGraph/categoryFiles/reviews_Books.json.gz"),
 		ingest.NewGoodreadsCSV("https://huggingface.co/datasets/Pauleera/Goodreads-Book-Reviews/resolve/main/reviews_reduced.csv"),
 	}
 
@@ -127,9 +127,10 @@ func run(ctx context.Context) error {
 		go func(workerID int) {
 			defer wg.Done()
 			for item := range rawItems {
+				item.SearchText = truncateText(item.SearchText, 1000)
 				vec, err := embedder.Embed(ctx, item.SearchText)
-				if err != nil {
-					log.Printf("Worker %d: Failed to embed item %s: %v", workerID, item.ID, err)
+				if err != nil || len(vec) == 0 {
+					log.Printf("Worker %d: skipping item %s: embed returned empty (err=%v)", workerID, item.ID, err)
 					continue
 				}
 				item.Embedding = vec
@@ -230,4 +231,16 @@ func run(ctx context.Context) error {
 
 	log.Println("ETL Pipeline completed successfully.")
 	return nil
+}
+
+// truncateText cuts s to at most maxBytes bytes on a valid UTF-8 boundary.
+func truncateText(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	// Walk back from maxBytes to find a valid rune boundary.
+	for maxBytes > 0 && (s[maxBytes]&0xC0) == 0x80 {
+		maxBytes--
+	}
+	return s[:maxBytes]
 }

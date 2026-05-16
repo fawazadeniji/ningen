@@ -14,8 +14,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY main.py .
 
-# Create directory for models
-RUN mkdir /models
+# Download model weights at build time — no runtime internet access needed.
+# MODEL_DIR is /models, baked into the image layer.
+RUN python -c "\
+from huggingface_hub import hf_hub_download; \
+[hf_hub_download(repo_id='optimum/all-MiniLM-L6-v2', filename=f, local_dir='/models') \
+ for f in ['model.onnx', 'tokenizer.json']]"
 
 EXPOSE 8000
 

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"ningen/domain"
 
+	pgvector "github.com/pgvector/pgvector-go"
+	pgvectorpgx "github.com/pgvector/pgvector-go/pgx"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -22,7 +24,14 @@ type PostgresStore struct {
 }
 
 func NewPostgresStore(ctx context.Context, connString string) (*PostgresStore, error) {
-	pool, err := pgxpool.New(ctx, connString)
+	config, err := pgxpool.ParseConfig(connString)
+	if err != nil {
+		return nil, fmt.Errorf("parse db config: %w", err)
+	}
+	config.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		return pgvectorpgx.RegisterTypes(ctx, conn)
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("connect to db: %w", err)
 	}
@@ -70,7 +79,7 @@ func (s *PostgresStore) BulkInsert(ctx context.Context, items []domain.Item) err
 			item.Domain,
 			item.Metadata,
 			item.SearchText,
-			item.Embedding,
+			pgvector.NewVector(item.Embedding),
 		})
 	}
 
