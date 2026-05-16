@@ -45,11 +45,6 @@ func run(ctx context.Context) error {
 		dbURL = "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
 	}
 
-	ollamaURL := os.Getenv("OLLAMA_URL")
-	if ollamaURL == "" {
-		ollamaURL = "http://localhost:11434"
-	}
-
 	log.Println("Initializing Postgres storage...")
 	db, err := store.NewPostgresStore(ctx, dbURL)
 	if err != nil {
@@ -73,7 +68,13 @@ func run(ctx context.Context) error {
 	}
 	log.Printf("Current item count is %d. Starting ETL process...", count)
 
-	embedder := embed.NewOllamaEmbedder(ollamaURL, "all-minilm")
+	embedderURL := os.Getenv("EMBEDDER_URL")
+	if embedderURL == "" {
+		embedderURL = "http://embedder:8000"
+	}
+
+	log.Printf("Connecting to embedder sidecar at %s...", embedderURL)
+	embedder := embed.NewSidecarEmbedder(embedderURL)
 
 	sources := []ingest.Source{
 		ingest.NewYelpCSV("https://huggingface.co/datasets/Yelp/yelp_review_full/resolve/main/yelp_review_full.csv"),

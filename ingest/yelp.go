@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -59,10 +60,11 @@ func (s *YelpCSV) Stream(ctx context.Context, out chan<- domain.Item) error {
 		label := record[0]
 		text := record[1]
 
+		meta, _ := json.Marshal(map[string]string{"label": label})
 		out <- domain.Item{
 			ID:         uuid.NewString(),
 			Domain:     "yelp",
-			Metadata:   fmt.Sprintf(`{"label": "%s"}`, label),
+			Metadata:   string(meta),
 			SearchText: text,
 		}
 	}

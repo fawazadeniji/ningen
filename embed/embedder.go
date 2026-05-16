@@ -6,64 +6,63 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 )
 
+// Embedder generates a fixed-length vector for a given piece of text.
 type Embedder interface {
 	Embed(ctx context.Context, text string) ([]float32, error)
 }
 
-type OllamaEmbedder struct {
-	URL   string
-	Model string
+// SidecarEmbedder calls the lightweight Python sidecar service.
+type SidecarEmbedder struct {
+	url    string
+	client *http.Client
 }
 
-func NewOllamaEmbedder(url, model string) *OllamaEmbedder {
-	return &OllamaEmbedder{
-		URL:   url,
-		Model: model,
+func NewSidecarEmbedder(url string) *SidecarEmbedder {
+	return &SidecarEmbedder{
+		url: url,
+		client: &http.Client{
+			Timeout: 30 * time.Second,
+		},
 	}
 }
 
 type embedRequest struct {
-	Model  string `json:"model"`
-	Prompt string `json:"prompt"`
+	Text string `json:"text"`
 }
 
 type embedResponse struct {
 	Embedding []float32 `json:"embedding"`
 }
 
-func (e *OllamaEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
-	reqBody := embedRequest{
-		Model:  e.Model,
-		Prompt: text,
-	}
-	
-	data, err := json.Marshal(reqBody)
+func (e *SidecarEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
+	reqBody, err := json.Marshal(embedRequest{Text: text})
 	if err != nil {
-		return nil, fmt.Errorf("marshal embed request: %w", err)
+		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.URL+"/api/embeddings", bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, "POST", e.url+"/embed", bytes.NewBuffer(reqBody))
 	if err != nil {
-		return nil, fmt.Errorf("create embed request: %w", err)
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := e.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("do embed request: %w", err)
+		return nil, fmt.Errorf("sidecar request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ollama embed unexpected status: %d", resp.StatusCode)
+		return nil, fmt.Errorf("sidecar returned status %d", resp.StatusCode)
 	}
 
-	var resBody embedResponse
-	if err := json.NewDecoder(resp.Body).Decode(&resBody); err != nil {
-		return nil, fmt.Errorf("decode embed response: %w", err)
+	var res embedResponse
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, fmt.Errorf("failed to decode sidecar response: %w", err)
 	}
 
-	return resBody.Embedding, nil
+	return res.Embedding, nil
 }

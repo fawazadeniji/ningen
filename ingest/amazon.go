@@ -70,10 +70,11 @@ func (s *AmazonGzJsonl) Stream(ctx context.Context, out chan<- domain.Item) erro
 			rating = r
 		}
 
+		meta, _ := json.Marshal(map[string]float64{"rating": rating})
 		out <- domain.Item{
 			ID:         uuid.NewString(),
 			Domain:     "amazon",
-			Metadata:   fmt.Sprintf(`{"rating": %.1f}`, rating),
+			Metadata:   string(meta),
 			SearchText: text,
 		}
 	}

@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -70,10 +71,11 @@ func (s *GoodreadsCSV) Stream(ctx context.Context, out chan<- domain.Item) error
 			continue
 		}
 
+		meta, _ := json.Marshal(map[string]string{"rating": rating})
 		out <- domain.Item{
 			ID:         uuid.NewString(),
 			Domain:     "goodreads",
-			Metadata:   fmt.Sprintf(`{"rating": "%s"}`, rating),
+			Metadata:   string(meta),
 			SearchText: text,
 		}
 	}

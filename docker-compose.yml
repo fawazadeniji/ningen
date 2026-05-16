@@ -2,7 +2,7 @@ services:
   db:
     image: pgvector/pgvector:pg16
     ports:
-      - "5432:5432"
+      - "5434:5432"
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
@@ -15,29 +15,61 @@ services:
       timeout: 5s
       retries: 5
 
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
+  # Lightweight Python sidecar for embeddings.
+  # Uses ONNX Runtime (CPU) — no Torch, very fast and light.
+  embedder:
+    build:
+      context: ./embedder_service
+    environment:
+      - MODEL_DIR=/models
     volumes:
-      - ollama_data:/root/.ollama
+      - model_cache:/models
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/version"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
       timeout: 5s
       retries: 5
 
+  # One-shot ETL worker: runs, ingests 100k items, and exits.
   etl_worker:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     environment:
       - DB_URL=postgres://postgres:postgres@db:5432/postgres?sslmode=disable
-      - OLLAMA_URL=http://ollama:11434
+      - EMBEDDER_URL=http://embedder:8000
     depends_on:
       db:
         condition: service_healthy
-      ollama:
+      embedder:
         condition: service_healthy
+    restart: "no"
+
+  # Long-running API server.
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      - DB_URL=postgres://postgres:postgres@db:5432/postgres?sslmode=disable
+      - EMBEDDER_URL=http://embedder:8000
+      - PORT=8080
+    depends_on:
+      db:
+        condition: service_healthy
+      embedder:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   pgdata:
-  ollama_data:
+  model_cache:

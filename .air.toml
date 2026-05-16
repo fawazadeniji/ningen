@@ -1,0 +1,26 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  # Only the API binary; the ETL worker (main.go) is a separate binary
+  cmd     = "go build -o ./tmp/api ./cmd/api/main.go"
+  bin     = "./tmp/api"
+  full_bin = "./tmp/api"
+
+  # Rebuild triggers
+  include_ext = ["go", "env"]
+  exclude_dir = ["tmp", "vendor", ".git"]
+  include_dir = ["cmd", "internal"]
+
+  # Stop the old process before starting the new one
+  send_interrupt = true
+  kill_delay     = "500ms"
+
+[log]
+  time = true
+
+[color]
+  main    = "magenta"
+  watcher = "cyan"
+  build   = "yellow"
+  runner  = "green"
