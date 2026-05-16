@@ -92,7 +92,7 @@ type TopicPreference struct {
 }
 
 type ReviewLengthProfile struct {
-	AverageLength int `json:"average_length"`
-	MinLength     int `json:"min_length"`
-	MaxLength     int `json:"max_length"`
+	AverageLength float64 `json:"average_length"`
+	MinLength     float64 `json:"min_length"`
+	MaxLength     float64 `json:"max_length"`
 }
