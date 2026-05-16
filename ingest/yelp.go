@@ -1,26 +1,27 @@
 package ingest
 
 import (
+	"bufio"
 	"context"
-	"encoding/csv"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"ningen/domain"
 
 	"github.com/google/uuid"
 )
 
-type YelpCSV struct {
+// YelpJsonl streams the SetFit/yelp_review_full JSONL format.
+// Each line: {"label": <int>, "text": "<review>"}
+type YelpJsonl struct {
 	URL string
 }
 
-func NewYelpCSV(url string) *YelpCSV {
-	return &YelpCSV{URL: url}
+func NewYelpJsonl(url string) *YelpJsonl {
+	return &YelpJsonl{URL: url}
 }
 
-func (s *YelpCSV) Stream(ctx context.Context, out chan<- domain.Item) error {
+func (s *YelpJsonl) Stream(ctx context.Context, out chan<- domain.Item) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.URL, nil)
 	if err != nil {
 		return fmt.Errorf("yelp create request: %w", err)
@@ -36,36 +37,36 @@ func (s *YelpCSV) Stream(ctx context.Context, out chan<- domain.Item) error {
 		return fmt.Errorf("yelp unexpected status: %d", resp.StatusCode)
 	}
 
-	reader := csv.NewReader(resp.Body)
-	// Yelp CSV format: label, text
-	for {
+	scanner := bufio.NewScanner(resp.Body)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
+	for scanner.Scan() {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
 
-		record, err := reader.Read()
-		if err != nil {
-			if err == io.EOF {
-				return nil
-			}
-			return fmt.Errorf("yelp read csv: %w", err)
+		var record struct {
+			Label json.RawMessage `json:"label"`
+			Text  string          `json:"text"`
 		}
-
-		if len(record) < 2 {
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			continue
+		}
+		if record.Text == "" {
 			continue
 		}
 
-		label := record[0]
-		text := record[1]
-
-		meta, _ := json.Marshal(map[string]string{"label": label})
+		meta, _ := json.Marshal(map[string]json.RawMessage{"label": record.Label})
 		out <- domain.Item{
 			ID:         uuid.NewString(),
 			Domain:     "yelp",
 			Metadata:   string(meta),
-			SearchText: text,
+			SearchText: record.Text,
 		}
 	}
+
+	return scanner.Err()
 }

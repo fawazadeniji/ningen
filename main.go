@@ -77,10 +77,17 @@ func run(ctx context.Context) error {
 	log.Printf("Connecting to embedder sidecar at %s...", embedderURL)
 	embedder := embed.NewSidecarEmbedder(embedderURL)
 
-	sources := []ingest.Source{
-		ingest.NewAmazonGzJsonl("https://snap.stanford.edu/data/amazon/productGraph/categoryFiles/reviews_Electronics.json.gz"),
-		ingest.NewAmazonGzJsonl("https://snap.stanford.edu/data/amazon/productGraph/categoryFiles/reviews_Books.json.gz"),
-		ingest.NewGoodreadsCSV("https://huggingface.co/datasets/Pauleera/Goodreads-Book-Reviews/resolve/main/reviews_reduced.csv"),
+	type limitedSource struct {
+		src   ingest.Source
+		limit int // max items to take from this source; 0 = unlimited
+	}
+
+	// Per-source limits ensure cross-domain diversity regardless of target size.
+	// Ratios: 40% yelp, 40% amazon, 20% goodreads.
+	sources := []limitedSource{
+		{ingest.NewYelpJsonl("https://huggingface.co/datasets/SetFit/yelp_review_full/resolve/main/train.jsonl"), targetItemCount * 40 / 100},
+		{ingest.NewAmazonGzJsonl("https://snap.stanford.edu/data/amazon/productGraph/categoryFiles/reviews_Electronics.json.gz"), targetItemCount * 40 / 100},
+		{ingest.NewGoodreadsCSV("https://huggingface.co/datasets/Pauleera/Goodreads-Book-Reviews/resolve/main/reviews_reduced.csv"), targetItemCount * 20 / 100},
 	}
 
 	rawItems := make(chan domain.Item, 1000)
@@ -151,21 +158,20 @@ func run(ctx context.Context) error {
 		itemsCollected := 0
 		itemsSkipped := 0
 
-		for _, s := range sources {
+		for _, ls := range sources {
 			if itemsCollected+count >= targetItemCount {
 				break
 			}
 
-			log.Printf("Streaming from source: %T", s)
+			log.Printf("Streaming from source: %T (limit: %d)", ls.src, ls.limit)
 			sourceChan := make(chan domain.Item, 100)
-
-			// Run source streaming in a separate goroutine so we can limit counts
 			sourceErrChan := make(chan error, 1)
 			go func() {
-				sourceErrChan <- s.Stream(ctx, sourceChan)
+				sourceErrChan <- ls.src.Stream(ctx, sourceChan)
 				close(sourceChan)
 			}()
 
+			sourceCollected := 0
 		streamLoop:
 			for {
 				select {
@@ -173,7 +179,7 @@ func run(ctx context.Context) error {
 					return
 				case err := <-sourceErrChan:
 					if err != nil {
-						log.Printf("Source %T returned error: %v", s, err)
+						log.Printf("Source %T returned error: %v", ls.src, err)
 					}
 					break streamLoop
 				case item, ok := <-sourceChan:
@@ -181,7 +187,7 @@ func run(ctx context.Context) error {
 						break streamLoop
 					}
 
-					// Resume logic: skip items we've already ingested in previous runs
+					// Resume logic: skip items already ingested in previous runs
 					if itemsSkipped < count {
 						itemsSkipped++
 						if itemsSkipped%10000 == 0 {
@@ -193,12 +199,17 @@ func run(ctx context.Context) error {
 					select {
 					case rawItems <- item:
 						itemsCollected++
+						sourceCollected++
 						if itemsCollected%1000 == 0 {
 							log.Printf("Read %d new items so far", itemsCollected)
 						}
 						if itemsCollected+count >= targetItemCount {
 							log.Printf("Reached target item count (%d). Stopping reader.", targetItemCount)
 							return
+						}
+						if ls.limit > 0 && sourceCollected >= ls.limit {
+							log.Printf("Source %T hit per-source limit (%d). Moving to next source.", ls.src, ls.limit)
+							break streamLoop
 						}
 					case <-ctx.Done():
 						return

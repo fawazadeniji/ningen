@@ -46,7 +46,8 @@ func (s *PostgresStore) Init(ctx context.Context) error {
 			domain VARCHAR(50) NOT NULL,
 			metadata JSONB,
 			search_text TEXT,
-			embedding VECTOR(384)
+			embedding VECTOR(384),
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);`,
 	}
 
