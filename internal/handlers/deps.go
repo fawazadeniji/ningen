@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+
 	"ningen/embed"
 	"ningen/internal/llm"
 	"ningen/internal/models"
