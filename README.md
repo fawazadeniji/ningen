@@ -254,21 +254,134 @@ The pipeline runs once and exits. Data is streamed directly from source URLs —
 
 ---
 
-## For My Partner (Task A)
+## Task A — User Modeling (Partner's Implementation)
 
-The database and embedder are shared — `docker compose up` gives you everything running. Task A does not need the vector DB.
+### Objective
 
-Wire your handler in [cmd/api/main.go](cmd/api/main.go):
+Given a user's historical reviews and an unseen item, simulate:
+- The **star rating** the user would give (1–5)
+- The **written review** they would write
+
+Evaluated on ROUGE/BERTScore (review quality), RMSE (rating accuracy), and human behavioral fidelity.
+
+### Endpoint
+
+```
+POST /simulate
+```
+
+Wire it in [cmd/api/main.go](cmd/api/main.go):
 
 ```go
 mux.HandleFunc("POST /simulate", handlers.SimulateHandler(deps))
 ```
 
-The `Deps` struct in [internal/handlers/deps.go](internal/handlers/deps.go) already holds:
-- `deps.LLM` — all registered LLM providers (call `deps.LLM.Get("gemini")`)
-- `deps.Embed` — the embedder client if you need it
+### Request Schema
 
-Your endpoint receives `user_persona` + item details and returns a simulated rating + review text. Run the final review through `provider.Humanize(ctx, rawReview, userPersona)` to get the Nigerian cultural pass for free — same as Task B.
+```json
+{
+  "user_persona": "A Lagos-based software engineer in his 40s, very critical of build quality.",
+  "review_history": [
+    {
+      "item": "Logitech MX Master 3 Mouse",
+      "rating": 5,
+      "review": "Absolute beast of a mouse. The scroll wheel alone is worth the price..."
+    },
+    {
+      "item": "Anker USB-C Hub",
+      "rating": 2,
+      "review": "Stopped working after 3 months. Anker quality has really dropped..."
+    }
+  ],
+  "target_item": {
+    "name": "Razer DeathAdder V3",
+    "category": "Electronics",
+    "description": "Ergonomic wired gaming mouse, 59g, optical sensor"
+  },
+  "provider": "gemini"
+}
+```
+
+### Response Schema
+
+```json
+{
+  "rating": 4,
+  "review": "...",
+  "reasoning": "..."
+}
+```
+
+### Architecture: Behavioral Fidelity Pipeline
+
+Do **not** just prompt the LLM with the history and ask it to guess. The rubric scores behavioral fidelity — the simulation must mimic this specific user's patterns, not a generic reviewer.
+
+Use a three-agent pipeline:
+
+```
+POST /simulate
+      │
+      ▼
+┌──────────────────────────────┐
+│  Agent 1: Behavioral         │  LLM reads review_history and extracts
+│  Profiler                    │  a structured profile:
+│                              │  {
+│                              │    avg_rating: 3.2,
+│                              │    rating_variance: "high",
+│                              │    review_length: "verbose",
+│                              │    vocabulary: "technical",
+│                              │    praises: ["build quality","longevity"],
+│                              │    complaints: ["value for money","durability"],
+│                              │    writing_quirks: ["uses ellipsis","starts with adjective"]
+│                              │  }
+└─────────────┬────────────────┘
+              │
+              ▼
+┌──────────────────────────────┐
+│  Agent 2: Fit Scorer         │  LLM compares target_item signals
+│                              │  against user's known preferences.
+│                              │  Output: predicted_rating (int 1–5)
+│                              │  + rating_rationale (string)
+└─────────────┬────────────────┘
+              │
+              ▼
+┌──────────────────────────────┐
+│  Agent 3: Voice Mimic        │  Few-shot: inject 2–3 of the user's
+│                              │  actual reviews as examples.
+│                              │  LLM generates a new review that:
+│                              │  - matches extracted writing_quirks
+│                              │  - references the item's specific traits
+│                              │  - reflects the predicted_rating's sentiment
+└─────────────┬────────────────┘
+              │
+              ▼
+        Humanizer (Nigerian cultural pass — same as Task B)
+              │
+              ▼
+    { rating: 4, review: "...", reasoning: "..." }
+```
+
+### Implementation Notes
+
+**Shared infrastructure available:**
+
+The `Deps` struct in [internal/handlers/deps.go](internal/handlers/deps.go) already holds:
+- `deps.LLM` — all registered LLM providers. Call `deps.LLM.Get(req.Provider)` to get the chosen backend.
+- `deps.Embed` — ONNX embedder sidecar (optional for Task A, but available).
+
+**LLMProvider interface** in [internal/llm/provider.go](internal/llm/provider.go):
+```go
+provider.Complete(ctx, []llm.Message{...})  // send messages, get string back
+provider.Humanize(ctx, rawText, userPersona) // Nigerian cultural pass
+```
+
+**Agent 1 tip:** Ask the LLM to respond with JSON only (use a system prompt that says "respond only with valid JSON, no markdown"). Then `json.Unmarshal` the result into a Go struct. This makes the profile reliable and composable.
+
+**Agent 2 tip:** Pass the structured profile from Agent 1 directly into the Agent 2 prompt — don't re-read the history. Keep token cost low.
+
+**Agent 3 tip:** Include the 2–3 shortest reviews from `review_history` as few-shot examples in the system prompt. Short reviews demonstrate style without bloating context.
+
+**Add the request/response types** to [internal/models/schemas.go](internal/models/schemas.go) following the same pattern as `RecommendRequest`.
 
 ---
 
