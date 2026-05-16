@@ -7,7 +7,7 @@ from tokenizers import Tokenizer
 import os
 from huggingface_hub import hf_hub_download
 
-MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+MODEL_NAME = "optimum/all-MiniLM-L6-v2"
 MODEL_DIR = os.getenv("MODEL_DIR", "/models")
 
 tokenizer = None
@@ -16,7 +16,7 @@ session = None
 def load_model():
     global tokenizer, session
     print(f"Loading model {MODEL_NAME} from {MODEL_DIR}...")
-    files = ["model.onnx", "tokenizer.json", "tokenizer_config.json", "vocab.txt", "special_tokens_map.json"]
+    files = ["model.onnx", "tokenizer.json"]
     for f in files:
         path = os.path.join(MODEL_DIR, f)
         if not os.path.exists(path):
