@@ -2,7 +2,7 @@ package models
 
 // ConversationTurn represents a single message in a multi-turn chat history.
 type ConversationTurn struct {
-	Role    string `json:"role"`    // "user" | "assistant"
+	Role    string `json:"role"` // "user" | "assistant"
 	Content string `json:"content"`
 }
 
