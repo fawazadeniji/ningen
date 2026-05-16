@@ -28,10 +28,10 @@ func main() {
 	}
 
 	fmt.Println("=== LLM Provider Connectivity Test ===")
-	
+
 	for name, provider := range providers {
 		fmt.Printf("[%s] Testing... ", name)
-		
+
 		start := time.Now()
 		resp, err := provider.Complete(ctx, testMessage)
 		duration := time.Since(start)
