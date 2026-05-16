@@ -1,11 +1,38 @@
 package llm
 
-import "context"
+import (
+	"context"
+
+	"github.com/openai/openai-go"
+)
 
 // Message is a single chat turn exchanged with an LLM.
 type Message struct {
 	Role    string // "system" | "user" | "assistant"
 	Content string
+}
+
+// CompletionOption customizes a single completion request.
+type CompletionOption func(*completionConfig)
+
+type completionConfig struct {
+	responseFormat *openai.ChatCompletionNewParamsResponseFormatUnion
+}
+
+// WithJSONSchemaResponse instructs the model to return structured JSON that
+// matches the supplied schema.
+func WithJSONSchemaResponse(name string, schema map[string]any) CompletionOption {
+	return func(cfg *completionConfig) {
+		cfg.responseFormat = &openai.ChatCompletionNewParamsResponseFormatUnion{
+			OfJSONSchema: &openai.ResponseFormatJSONSchemaParam{
+				JSONSchema: openai.ResponseFormatJSONSchemaJSONSchemaParam{
+					Name:   name,
+					Strict: openai.Bool(true),
+					Schema: schema,
+				},
+			},
+		}
+	}
 }
 
 // LLMProvider is the contract every LLM backend must satisfy.
@@ -15,7 +42,7 @@ type LLMProvider interface {
 	Name() string
 
 	// Complete sends a conversation to the model and returns its reply.
-	Complete(ctx context.Context, messages []Message) (string, error)
+	Complete(ctx context.Context, messages []Message, opts ...CompletionOption) (string, error)
 
 	// Humanize post-processes rawText through a culturally-aware rewrite
 	// that grounds the output in everyday Nigerian contexts.

@@ -16,12 +16,16 @@ func Build() (Registry, error) {
 
 	// 1. Kimi (Moonshot)
 	if key := os.Getenv("MOONSHOT_API_KEY"); key != "" {
-		reg["kimi"] = NewGenericOpenAIClient(OpenAIConfig{
+		provider, err := NewGenericOpenAIClient(OpenAIConfig{
 			Name:    "kimi",
 			BaseURL: "https://api.moonshot.ai/v1/chat/completions",
 			APIKey:  key,
 			Model:   "kimi-k2.6", // 2026 Flagship model
 		})
+		if err != nil {
+			return nil, fmt.Errorf("init kimi provider: %w", err)
+		}
+		reg["kimi"] = provider
 	}
 
 	// 2. Gemini (OpenAI Compatibility Layer)
@@ -30,36 +34,53 @@ func Build() (Registry, error) {
 		if model == "" {
 			model = "gemini-1.5-flash"
 		}
-		reg["gemini"] = NewGenericOpenAIClient(OpenAIConfig{
+		provider, err := NewGenericOpenAIClient(OpenAIConfig{
 			Name:    "gemini",
 			BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
 			APIKey:  key,
 			Model:   model,
 		})
+		if err != nil {
+			return nil, fmt.Errorf("init gemini provider: %w", err)
+		}
+		reg["gemini"] = provider
 	}
 
 	// 3. OpenAI / Azure OpenAI
 	azureURL := os.Getenv("AZURE_OPENAI_URL")
 	azureKey := os.Getenv("AZURE_OPENAI_KEY")
 	if azureURL != "" && azureKey != "" {
-		reg["openai"] = NewGenericOpenAIClient(OpenAIConfig{
-			Name:    "openai",
-			BaseURL: azureURL,
-			APIKey:  azureKey,
-			IsAzure: true,
-			Model:   os.Getenv("OPENAI_MODEL"),
+		apiVersion := os.Getenv("AZURE_OPENAI_API_VERSION")
+		if apiVersion == "" {
+			apiVersion = "2024-06-01"
+		}
+		provider, err := NewGenericOpenAIClient(OpenAIConfig{
+			Name:            "openai",
+			APIKey:          azureKey,
+			IsAzure:         true,
+			AzureEndpoint:   azureURL,
+			AzureAPIVersion: apiVersion,
+			Model:           os.Getenv("AZURE_OPENAI_MODEL"),
 		})
+		if err != nil {
+			return nil, fmt.Errorf("init azure openai provider: %w", err)
+		}
+		reg["openai"] = provider
 	} else if key := os.Getenv("OPENAI_API_KEY"); key != "" {
 		model := os.Getenv("OPENAI_MODEL")
 		if model == "" {
 			model = "gpt-4o-mini"
 		}
-		reg["openai"] = NewGenericOpenAIClient(OpenAIConfig{
+		provider, err := NewGenericOpenAIClient(OpenAIConfig{
 			Name:    "openai",
 			BaseURL: "https://api.openai.com/v1/chat/completions",
 			APIKey:  key,
 			Model:   model,
 		})
+		if err != nil {
+			return nil, fmt.Errorf("init openai provider: %w", err)
+		}
+		reg["openai"] = provider
 	}
 
 	if len(reg) == 0 {
@@ -82,4 +103,3 @@ func (r Registry) Get(name string) (LLMProvider, error) {
 
 	return nil, fmt.Errorf("no LLM providers registered")
 }
-

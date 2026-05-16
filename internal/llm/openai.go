@@ -1,42 +1,62 @@
 package llm
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
-	"time"
+
+	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/azure"
+	"github.com/openai/openai-go/option"
 )
 
 // OpenAIConfig holds the details for any OpenAI-compatible provider (Kimi, Gemini, Azure, OpenAI).
 type OpenAIConfig struct {
-	Name        string
-	BaseURL     string
-	APIKey      string
-	Model       string
-	IsAzure     bool
-	ExtraHeader map[string]string
+	Name            string
+	BaseURL         string
+	APIKey          string
+	Model           string
+	IsAzure         bool
+	AzureEndpoint   string
+	AzureAPIVersion string
+	ExtraHeader     map[string]string
 }
 
 type GenericOpenAIClient struct {
-	cfg  OpenAIConfig
-	http *http.Client
+	cfg    OpenAIConfig
+	client openai.Client
 }
 
-func NewGenericOpenAIClient(cfg OpenAIConfig) *GenericOpenAIClient {
-	return &GenericOpenAIClient{
-		cfg: cfg,
-		http: &http.Client{
-			Timeout: 60 * time.Second,
-		},
+func NewGenericOpenAIClient(cfg OpenAIConfig) (*GenericOpenAIClient, error) {
+	opts := make([]option.RequestOption, 0, 4)
+
+	if cfg.IsAzure {
+		if cfg.AzureEndpoint == "" {
+			return nil, fmt.Errorf("azure endpoint is required")
+		}
+		if cfg.AzureAPIVersion == "" {
+			cfg.AzureAPIVersion = "2024-06-01"
+		}
+		opts = append(opts, azure.WithEndpoint(cfg.AzureEndpoint, cfg.AzureAPIVersion))
+		opts = append(opts, azure.WithAPIKey(cfg.APIKey))
+	} else {
+		if cfg.BaseURL != "" {
+			opts = append(opts, option.WithBaseURL(cfg.BaseURL))
+		}
+		opts = append(opts, option.WithAPIKey(cfg.APIKey))
 	}
+
+	for key, value := range cfg.ExtraHeader {
+		opts = append(opts, option.WithHeader(key, value))
+	}
+
+	client := openai.NewClient(opts...)
+	return &GenericOpenAIClient{cfg: cfg, client: client}, nil
 }
 
 func (c *GenericOpenAIClient) Name() string { return c.cfg.Name }
 
-func (c *GenericOpenAIClient) Complete(ctx context.Context, messages []Message) (string, error) {
-	return c.call(ctx, messages)
+func (c *GenericOpenAIClient) Complete(ctx context.Context, messages []Message, opts ...CompletionOption) (string, error) {
+	return c.call(ctx, messages, opts...)
 }
 
 func (c *GenericOpenAIClient) Humanize(ctx context.Context, rawText string, userContext string) (string, error) {
@@ -47,81 +67,49 @@ func (c *GenericOpenAIClient) Humanize(ctx context.Context, rawText string, user
 	return c.call(ctx, messages)
 }
 
-type oaiMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type oaiRequest struct {
-	Model    string       `json:"model,omitempty"`
-	Messages []oaiMessage `json:"messages"`
-}
-
-type oaiResponse struct {
-	Choices []struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
-	} `json:"choices"`
-	Error *struct {
-		Message string `json:"message"`
-	} `json:"error,omitempty"`
-}
-
-func (c *GenericOpenAIClient) call(ctx context.Context, messages []Message) (string, error) {
-	wire := make([]oaiMessage, len(messages))
-	for i, m := range messages {
-		wire[i] = oaiMessage{Role: m.Role, Content: m.Content}
+func (c *GenericOpenAIClient) call(ctx context.Context, messages []Message, opts ...CompletionOption) (string, error) {
+	config := completionConfig{}
+	for _, opt := range opts {
+		opt(&config)
 	}
 
-	// For Azure, model is usually part of the URL, so we omit it from the body
-	model := c.cfg.Model
-	if c.cfg.IsAzure {
-		model = ""
+	chatMessages := make([]openai.ChatCompletionMessageParamUnion, 0, len(messages))
+	for _, message := range messages {
+		chatMessages = append(chatMessages, toChatMessage(message))
 	}
 
-	body, err := json.Marshal(oaiRequest{Model: model, Messages: wire})
+	params := openai.ChatCompletionNewParams{
+		Messages: chatMessages,
+		Model:    openai.ChatModel(c.cfg.Model),
+	}
+	if config.responseFormat != nil {
+		params.ResponseFormat = *config.responseFormat
+	}
+
+	response, err := c.client.Chat.Completions.New(ctx, params)
 	if err != nil {
 		return "", err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.BaseURL, bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	
-	// Handle Auth
-	if c.cfg.IsAzure {
-		req.Header.Set("api-key", c.cfg.APIKey)
-	} else {
-		req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
-	}
-
-	// Add any extra headers (useful for future-proofing)
-	for k, v := range c.cfg.ExtraHeader {
-		req.Header.Set(k, v)
-	}
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	var result oaiResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("decode error: %w", err)
-	}
-
-	if result.Error != nil {
-		return "", fmt.Errorf("api error: %s", result.Error.Message)
-	}
-
-	if len(result.Choices) == 0 {
+	if len(response.Choices) == 0 {
 		return "", fmt.Errorf("empty response")
 	}
 
-	return result.Choices[0].Message.Content, nil
+	content := response.Choices[0].Message.Content
+	if content == "" {
+		return "", fmt.Errorf("empty response content")
+	}
+
+	return content, nil
+}
+
+func toChatMessage(message Message) openai.ChatCompletionMessageParamUnion {
+	switch message.Role {
+	case "system":
+		return openai.SystemMessage(message.Content)
+	case "assistant":
+		return openai.AssistantMessage(message.Content)
+	default:
+		return openai.UserMessage(message.Content)
+	}
 }
