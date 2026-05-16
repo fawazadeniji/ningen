@@ -10,8 +10,8 @@ Deadline: 24 May 2026.
 A fully containerized recommendation system built on real-world review data (Yelp, Amazon, Goodreads).
 It handles two distinct tasks through one unified API:
 
-- **Task A** *(partner's scope)* — Simulate a user's star rating and written review for an unseen item based on their history.
-- **Task B** *(this codebase)* — Conversational, context-aware recommendation with cold-start handling, cross-domain retrieval, and multi-turn dialogue.
+- **Task A** — Simulate a user's star rating and written review for an unseen item based on their history.
+- **Task B** — Conversational, context-aware recommendation with cold-start handling, cross-domain retrieval, and multi-turn dialogue.
 
 All outputs are post-processed through a Nigerian cultural humanizer so responses feel natural and grounded in everyday Nigerian life.
 
@@ -66,12 +66,12 @@ JSON response (top-N items + reasoning)
 
 ## Services
 
-| Service | Description |
-|---|---|
-| `db` | PostgreSQL 16 + pgvector extension |
-| `embedder` | Python FastAPI sidecar running `all-MiniLM-L6-v2` via ONNX Runtime (CPU-only, no Torch) |
+| Service      | Description                                                                                    |
+| ------------ | ---------------------------------------------------------------------------------------------- |
+| `db`         | PostgreSQL 16 + pgvector extension                                                             |
+| `embedder`   | Python FastAPI sidecar running `all-MiniLM-L6-v2` via ONNX Runtime (CPU-only, no Torch)        |
 | `etl_worker` | One-shot Go binary — streams 100k reviews, embeds, bulk-inserts, builds HNSW index, then exits |
-| `api` | Long-running Go HTTP server exposing the recommendation API |
+| `api`        | Long-running Go HTTP server exposing the recommendation API                                    |
 
 The embedder uses ONNX Runtime instead of Ollama — no extra 4 GB pull, cold starts in seconds, and model weights are cached in a Docker volume after first run.
 
@@ -98,6 +98,7 @@ docker compose up --build
 ```
 
 That single command:
+
 1. Starts Postgres and waits for it to be healthy.
 2. Starts the embedder sidecar and downloads the ONNX model on first run (~90 MB, cached to a volume).
 3. Runs the ETL worker — streams 100k reviews from Yelp, Amazon, and Goodreads, embeds each one, bulk-inserts into Postgres, and builds the HNSW index. **This takes 20–40 minutes on first run** depending on network speed.
@@ -134,13 +135,13 @@ Conversational recommendation. Pass a user persona and chat history; receive ran
 }
 ```
 
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `user_persona` | string | **yes** | — | Free-text description of the user. |
-| `history` | array | no | `[]` | Alternating `user`/`assistant` turns. Empty history triggers a clarifying question. |
-| `cross_domain` | bool | no | `false` | When `true`, LLM freely mixes categories (books, products, restaurants). |
-| `limit` | int | no | `10` | Max items to return (1–50). |
-| `provider` | string | no | first available | LLM backend: `"kimi"`, `"gemini"`, or `"openai"`. Falls back to any available if omitted. |
+| Field          | Type   | Required | Default         | Description                                                                               |
+| -------------- | ------ | -------- | --------------- | ----------------------------------------------------------------------------------------- |
+| `user_persona` | string | **yes**  | —               | Free-text description of the user.                                                        |
+| `history`      | array  | no       | `[]`            | Alternating `user`/`assistant` turns. Empty history triggers a clarifying question.       |
+| `cross_domain` | bool   | no       | `false`         | When `true`, LLM freely mixes categories (books, products, restaurants).                  |
+| `limit`        | int    | no       | `10`            | Max items to return (1–50).                                                               |
+| `provider`     | string | no       | first available | LLM backend: `"kimi"`, `"gemini"`, or `"openai"`. Falls back to any available if omitted. |
 
 **Normal response:**
 
@@ -179,18 +180,18 @@ Returns `200 OK` when the API server is ready. Used by Docker health checks.
 
 Copy `.env.example` to `.env`. At least one LLM key is required or the API server will refuse to start.
 
-| Variable | Description |
-|---|---|
-| `MOONSHOT_API_KEY` | Kimi (Moonshot AI) API key |
-| `GEMINI_API_KEY` | Google Gemini API key |
-| `OPENAI_API_KEY` | OpenAI API key |
-| `OPENAI_MODEL` | Override OpenAI model (default: `gpt-4o-mini`) |
-| `GEMINI_MODEL` | Override Gemini model (default: `gemini-1.5-flash`) |
-| `AZURE_OPENAI_URL` | Azure OpenAI endpoint URL (replaces `OPENAI_API_KEY`) |
-| `AZURE_OPENAI_KEY` | Azure OpenAI key |
-| `DB_URL` | Postgres connection string (auto-set in docker-compose) |
-| `EMBEDDER_URL` | Embedder sidecar URL (auto-set in docker-compose) |
-| `PORT` | API server port (default: `8080`) |
+| Variable           | Description                                             |
+| ------------------ | ------------------------------------------------------- |
+| `MOONSHOT_API_KEY` | Kimi (Moonshot AI) API key                              |
+| `GEMINI_API_KEY`   | Google Gemini API key                                   |
+| `OPENAI_API_KEY`   | OpenAI API key                                          |
+| `OPENAI_MODEL`     | Override OpenAI model (default: `gpt-4o-mini`)          |
+| `GEMINI_MODEL`     | Override Gemini model (default: `gemini-1.5-flash`)     |
+| `AZURE_OPENAI_URL` | Azure OpenAI endpoint URL (replaces `OPENAI_API_KEY`)   |
+| `AZURE_OPENAI_KEY` | Azure OpenAI key                                        |
+| `DB_URL`           | Postgres connection string (auto-set in docker-compose) |
+| `EMBEDDER_URL`     | Embedder sidecar URL (auto-set in docker-compose)       |
+| `PORT`             | API server port (default: `8080`)                       |
 
 ---
 
@@ -242,6 +243,7 @@ ningen/
 The pipeline runs once and exits. Data is streamed directly from source URLs — no large files written to disk.
 
 **Sources (in order):**
+
 1. Amazon Electronics — gzipped JSONL (~1.7M reviews)
 2. Amazon Books — gzipped JSONL (~8M reviews, overflow if Electronics runs short)
 3. Goodreads Book Reviews — CSV (cross-domain diversity)
@@ -254,134 +256,149 @@ The pipeline runs once and exits. Data is streamed directly from source URLs —
 
 ---
 
-## Task A — User Modeling (Partner's Implementation)
+## Task A — User Modeling
 
 ### Objective
 
-Given a user's historical reviews and an unseen item, simulate:
-- The **star rating** the user would give (1–5)
-- The **written review** they would write
+Given a user's historical reviews and a target product, the system predicts:
 
-Evaluated on ROUGE/BERTScore (review quality), RMSE (rating accuracy), and human behavioral fidelity.
+- A **rating** (float from 1.0 to 5.0)
+- A **generated review** aligned with the user's inferred style
+- A **rating reasoning** trace from the rater node
+- The inferred **user profile** used by downstream steps
 
 ### Endpoint
 
 ```
-POST /simulate
+POST /generate-review
 ```
 
-Wire it in [cmd/api/main.go](cmd/api/main.go):
+Wired in [cmd/api/main.go](cmd/api/main.go):
 
 ```go
-mux.HandleFunc("POST /simulate", handlers.SimulateHandler(deps))
+mux.HandleFunc("POST /generate-review", handlers.GenerateReviewHandler(deps))
 ```
 
 ### Request Schema
 
 ```json
 {
-  "user_persona": "A Lagos-based software engineer in his 40s, very critical of build quality.",
-  "review_history": [
+  "user_history": [
     {
-      "item": "Logitech MX Master 3 Mouse",
-      "rating": 5,
-      "review": "Absolute beast of a mouse. The scroll wheel alone is worth the price..."
+      "product_id": "h1",
+      "product_name": "Wireless Earbuds",
+      "product_category": "electronics",
+      "star_rating": 4,
+      "review_text": "Good sound for the price.",
+      "review_date": "2026-05-01",
+      "source": "amazon"
     },
     {
-      "item": "Anker USB-C Hub",
-      "rating": 2,
-      "review": "Stopped working after 3 months. Anker quality has really dropped..."
+      "product_id": "h2",
+      "product_name": "Laptop Stand",
+      "product_category": "electronics",
+      "star_rating": 3.5,
+      "review_text": "Useful, but a little overpriced.",
+      "review_date": "2026-05-10",
+      "source": "amazon"
     }
   ],
-  "target_item": {
-    "name": "Razer DeathAdder V3",
-    "category": "Electronics",
-    "description": "Ergonomic wired gaming mouse, 59g, optical sensor"
+  "target_product": {
+    "product_id": "t1",
+    "product_name": "Portable Speaker",
+    "product_category": "electronics",
+    "description": "Compact Bluetooth speaker with deep bass.",
+    "price": 25000,
+    "currency": "NGN",
+    "source": "amazon",
+    "features": ["bluetooth", "portable", "deep bass"],
+    "rating": 4.4,
+    "review_count": 152
   },
-  "provider": "gemini"
+  "provider": "kimi"
 }
 ```
+
+Validation rules currently enforced in handler:
+
+- `user_history` must be non-empty
+- `target_product.product_id` is required
+- `provider` defaults to `kimi` if omitted
+- unknown/unavailable provider returns `400`
 
 ### Response Schema
 
 ```json
 {
-  "rating": 4,
-  "review": "...",
-  "reasoning": "..."
+  "generated_review": "Revised review that sounds more natural and direct.",
+  "predicted_rating": 4.2,
+  "rating_reasoning": "This product fits the user's preferences well.",
+  "user_profile": {
+    "user_id": "u-1",
+    "overall_tendency": "balanced",
+    "average_rating": 3.8,
+    "preferred_categories": ["electronics"]
+  },
+  "iterations": 2
 }
 ```
 
-### Architecture: Behavioral Fidelity Pipeline
+### Architecture: Implemented Pipeline
 
-Do **not** just prompt the LLM with the history and ask it to guess. The rubric scores behavioral fidelity — the simulation must mimic this specific user's patterns, not a generic reviewer.
-
-Use a three-agent pipeline:
+Current flow in [internal/pipeline/graph.go](internal/pipeline/graph.go):
 
 ```
-POST /simulate
+POST /generate-review
       │
       ▼
 ┌──────────────────────────────┐
-│  Agent 1: Behavioral         │  LLM reads review_history and extracts
-│  Profiler                    │  a structured profile:
-│                              │  {
-│                              │    avg_rating: 3.2,
-│                              │    rating_variance: "high",
-│                              │    review_length: "verbose",
-│                              │    vocabulary: "technical",
-│                              │    praises: ["build quality","longevity"],
-│                              │    complaints: ["value for money","durability"],
-│                              │    writing_quirks: ["uses ellipsis","starts with adjective"]
-│                              │  }
+│ Agent 1: Profiler            │ Structured JSON profile extraction
+│                              │ via schema-constrained LLM output
 └─────────────┬────────────────┘
               │
               ▼
 ┌──────────────────────────────┐
-│  Agent 2: Fit Scorer         │  LLM compares target_item signals
-│                              │  against user's known preferences.
-│                              │  Output: predicted_rating (int 1–5)
-│                              │  + rating_rationale (string)
+│ Agent 2: Rater               │ Predicts rating + chain_of_thought
+│                              │ (parsed to rating_reasoning)
 └─────────────┬────────────────┘
               │
               ▼
 ┌──────────────────────────────┐
-│  Agent 3: Voice Mimic        │  Few-shot: inject 2–3 of the user's
-│                              │  actual reviews as examples.
-│                              │  LLM generates a new review that:
-│                              │  - matches extracted writing_quirks
-│                              │  - references the item's specific traits
-│                              │  - reflects the predicted_rating's sentiment
+│ Agent 3: Drafter             │ Localizes product context to Nigerian
+│                              │ settings, then drafts the review text
 └─────────────┬────────────────┘
               │
               ▼
-        Humanizer (Nigerian cultural pass — same as Task B)
+┌──────────────────────────────┐
+│ Agent 4: Critic             │ PASS/FAIL behavioral fidelity check
+│                              │ with revision loop
+└─────────────┬────────────────┘
               │
               ▼
-    { rating: 4, review: "...", reasoning: "..." }
+Return response with generated_review, predicted_rating,
+rating_reasoning, user_profile, iterations
 ```
+
+Critic loop details:
+
+- max 2 draft/critic iterations (`maxLoops = 2`)
+- if critic returns `PASS`, current draft becomes `final_review`
+- if loop cap is reached, latest draft is returned
+- local fallback checks reject common AI-sounding phrasing when critic parsing fails
 
 ### Implementation Notes
 
-**Shared infrastructure available:**
+Task A implementation currently lives in:
 
-The `Deps` struct in [internal/handlers/deps.go](internal/handlers/deps.go) already holds:
-- `deps.LLM` — all registered LLM providers. Call `deps.LLM.Get(req.Provider)` to get the chosen backend.
-- `deps.Embed` — ONNX embedder sidecar (optional for Task A, but available).
+- [internal/handlers/task_a.go](internal/handlers/task_a.go) (endpoint contract + orchestration)
+- [internal/pipeline/graph.go](internal/pipeline/graph.go) (node sequence + loop control)
+- [internal/pipeline/nodes/](internal/pipeline/nodes/) (Profiler, Rater, Drafter, Critic, Localization)
+- [internal/handlers/task_a_test.go](internal/handlers/task_a_test.go) (end-to-end handler test)
 
-**LLMProvider interface** in [internal/llm/provider.go](internal/llm/provider.go):
-```go
-provider.Complete(ctx, []llm.Message{...})  // send messages, get string back
-provider.Humanize(ctx, rawText, userPersona) // Nigerian cultural pass
-```
+Notes on current behavior:
 
-**Agent 1 tip:** Ask the LLM to respond with JSON only (use a system prompt that says "respond only with valid JSON, no markdown"). Then `json.Unmarshal` the result into a Go struct. This makes the profile reliable and composable.
-
-**Agent 2 tip:** Pass the structured profile from Agent 1 directly into the Agent 2 prompt — don't re-read the history. Keep token cost low.
-
-**Agent 3 tip:** Include the 2–3 shortest reviews from `review_history` as few-shot examples in the system prompt. Short reviews demonstrate style without bloating context.
-
-**Add the request/response types** to [internal/models/schemas.go](internal/models/schemas.go) following the same pattern as `RecommendRequest`.
+- Task A request/response structs are defined in handler/pipeline packages, not in [internal/models/schemas.go](internal/models/schemas.go).
+- Task A currently uses provider `Complete` calls in pipeline nodes; it does not run a final `Humanize` pass like Task B.
 
 ---
 
