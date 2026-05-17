@@ -9,25 +9,76 @@ import (
 	"ningen/internal/llm"
 )
 
-// ProfilerResponse represents the structured output from the Profiler node.
-type ProfilerResponse struct {
-	UserID              string              `json:"user_id"`
-	OverallTendency     string              `json:"overall_tendency"`
-	AverageRating       float64             `json:"average_rating"`
-	PreferredCategories []string            `json:"preferred_categories"`
-	ReviewStyle         ReviewStyle         `json:"review_style"`
-	BehavioralMarkers   []BehavioralMarker  `json:"behavioral_markers"`
-	ToneProfile         ToneProfile         `json:"tone_profile"`
-	RatingPatterns      RatingPatterns      `json:"rating_patterns"`
-	TopicPreferences    []TopicPreference   `json:"topic_preferences"`
-	ReviewLength        ReviewLengthProfile `json:"review_length"`
-}
+
 
 // Profiler creates a node function that extracts user behavioral patterns.
 func Profiler(model llm.LLMProvider) func(context.Context, AgentState) (AgentState, error) {
 	return func(ctx context.Context, state AgentState) (AgentState, error) {
 		if len(state.UserHistory) == 0 {
 			return state, fmt.Errorf("user history is empty")
+		}
+
+		// Calculate precise metrics in Go to prevent LLM hallucination
+		var totalRating float64
+		distribution := map[string]int{"1": 0, "2": 0, "3": 0, "4": 0, "5": 0}
+
+		var totalLength int
+		minLength := -1
+		maxLength := 0
+
+		for _, entry := range state.UserHistory {
+			totalRating += entry.StarRating
+
+			// Safely count ratings distribution
+			ratingInt := int(entry.StarRating + 0.5) // Round to nearest star
+			if ratingInt >= 1 && ratingInt <= 5 {
+				distribution[fmt.Sprintf("%d", ratingInt)]++
+			}
+
+			// Calculate exact review lengths (character count)
+			textLength := len(entry.ReviewText)
+			totalLength += textLength
+
+			if minLength == -1 || textLength < minLength {
+				minLength = textLength
+			}
+			if textLength > maxLength {
+				maxLength = textLength
+			}
+		}
+		calculatedAverageRating := totalRating / float64(len(state.UserHistory))
+
+		// Safely compute review lengths
+		averageLength := 0
+		if len(state.UserHistory) > 0 {
+			averageLength = totalLength / len(state.UserHistory)
+		}
+		if minLength == -1 {
+			minLength = 0
+		}
+
+		calculatedReviewLength := ReviewLengthProfile{
+			AverageLength: averageLength,
+			MinLength:     minLength,
+			MaxLength:     maxLength,
+		}
+
+		// Dynamically compute thresholds based on their average
+		lowThreshold := calculatedAverageRating - 1.0
+		if lowThreshold < 1.0 {
+			lowThreshold = 1.0
+		}
+		highThreshold := calculatedAverageRating + 1.0
+		if highThreshold > 5.0 {
+			highThreshold = 5.0
+		}
+
+		calculatedRatingPatterns := RatingPatterns{
+			RatingsDistribution: distribution,
+			RatingThresholds: RatingThresholds{
+				Low:  lowThreshold,
+				High: highThreshold,
+			},
 		}
 
 		historyStr := buildHistoryContext(state.UserHistory)
@@ -46,14 +97,17 @@ func Profiler(model llm.LLMProvider) func(context.Context, AgentState) (AgentSta
 		state.UserProfile = &UserProfile{
 			UserID:              profile.UserID,
 			OverallTendency:     profile.OverallTendency,
-			AverageRating:       profile.AverageRating,
+			ConsumerPersona:     profile.ConsumerPersona,
+			AverageRating:       calculatedAverageRating, // Calculated safely in Go
+			RatingPatterns:      calculatedRatingPatterns, // Calculated safely in Go
+			ReviewLength:        calculatedReviewLength, // Calculated safely in Go
 			PreferredCategories: profile.PreferredCategories,
+			FormattingQuirks:    profile.FormattingQuirks,
 			ReviewStyle:         profile.ReviewStyle,
 			BehavioralMarkers:   profile.BehavioralMarkers,
 			ToneProfile:         profile.ToneProfile,
-			RatingPatterns:      profile.RatingPatterns,
 			TopicPreferences:    profile.TopicPreferences,
-			ReviewLength:        profile.ReviewLength,
+			CulturalHooks:       profile.CulturalHooks,
 		}
 
 		return state, nil
@@ -75,27 +129,29 @@ func buildHistoryContext(history []HistoryEntry) string {
 
 // buildProfilerPrompt constructs the prompt for extracting user behavioral patterns.
 func buildProfilerPrompt(historyContext string) []llm.Message {
-	return buildMessages(
-		"You are an expert behavioral analyst. Extract a structured profile from review history. You MUST respond with only valid JSON, no markdown, no explanation.",
-		fmt.Sprintf(`Analyze the following user's review history and extract their behavioral profile.
+	systemInstruction := `You are an expert behavioral psychologist and forensic linguist. Your task is to analyze a user's review history and extract a highly detailed psychological and stylistic profile. 
+You MUST respond with valid JSON matching the exact schema provided. Do not include markdown formatting or explanations.`
+
+	userInstruction := fmt.Sprintf(`Analyze the following user's review history and extract their behavioral and linguistic profile.
 
 REVIEW HISTORY:
 %s
 
-RESPOND WITH VALID JSON ONLY. Extract and compute ALL of these fields:
-1. user_id: A unique identifier for this user (e.g., "user_123")
-2. overall_tendency: One of "positive", "balanced", or "critical" based on average sentiment
-3. average_rating: Compute the mean of all star_rating values (e.g., 3.75)
-4. preferred_categories: Array of product categories this user reviews most (e.g., ["electronics", "books"])
-5. review_style: Object with: detail_level ("brief"|"moderate"|"detailed"), use_emotional_lang (true|false), use_tech_language (true|false), comparison_frequency ("rare"|"occasional"|"frequent")
-6. behavioral_markers: Array of behavioral patterns, each with marker, frequency, confidence (0.0-1.0), and description. Example: [{"marker": "price_conscious", "frequency": "frequent", "confidence": 0.85, "description": "Watches for discounts"}]. INCLUDE AT LEAST 2-3 markers.
-7. tone_profile: Object with cheerfulness, sarcasm, urgency, formality (each 0.0-1.0, e.g., 0.5)
-8. rating_patterns: Object with ratings_distribution (e.g., {"3": 2, "4": 3, "5": 1}) showing count per rating, and rating_thresholds (e.g., {"high_satisfaction": 4.5, "acceptable": 3.0})
-9. topic_preferences: Array of topics the user mentions, each with topic (string), sentiment ("positive"|"negative"|"neutral"), frequency (count), and importance ("high"|"medium"|"low"). Example: [{"topic": "battery_life", "sentiment": "positive", "frequency": 2, "importance": "high"}]. INCLUDE 2-3 topics minimum.
-10. review_length: Object with average_length, min_length, max_length (length of reviews in characters). Example: {"average_length": 95.5, "min_length": 40, "max_length": 180}
+Extract the following dimensions:
+1. user_id: A unique identifier for this user (e.g., "user_123").
+2. overall_tendency: "positive", "balanced", or "critical".
+3. consumer_persona: A short descriptor of their shopping identity (e.g., "Bargain Hunter", "Quality Snob", "Impatient Buyer").
+4. preferred_categories: Array of product categories this user reviews most.
+5. formatting_quirks: Crucial for reproducing their exact writing style. Note their punctuation_habits (e.g., "uses excessive exclamation marks", "rarely uses periods"), capitalization_style ("proper", "all_lowercase", "random_caps"), and emoji_usage ("frequent", "none").
+6. review_style: Detail their verbosity_level ("terse", "concise", "verbose", "rambling"), use_emotional_lang (boolean), and use_tech_language (boolean).
+7. behavioral_markers: 2-3 specific behavioral patterns with a confidence score and description (e.g., "price_conscious", "focuses_on_delivery_speed").
+8. tone_profile: Cheerfulness, sarcasm, urgency, formality (0.0 to 1.0).
+9. topic_preferences: 2-3 specific topics they care about (e.g., "customer service", "durability") with sentiment and importance.
+10. cultural_hooks: Keywords or concepts they focus on that can be localized (e.g., "complains about shipping delays", "mentions family size").
 
-Ensure ALL fields are populated. Output ONLY the JSON object, no explanation or markdown.`, historyContext),
-	)
+Ensure ALL fields are populated based on the text. Output ONLY the raw JSON object.`, historyContext)
+
+	return buildMessages(systemInstruction, userInstruction)
 }
 
 // buildProfilerSchema constructs the strict response schema for the Profiler LLM call.
@@ -108,30 +164,38 @@ func buildProfilerSchema() map[string]any {
 				"type": "string",
 				"enum": []string{"positive", "balanced", "critical"},
 			},
-			"average_rating": map[string]any{
-				"type":    "number",
-				"minimum": 1.0,
-				"maximum": 5.0,
-			},
+			"consumer_persona": map[string]any{"type": "string"},
 			"preferred_categories": map[string]any{
 				"type":  "array",
 				"items": map[string]any{"type": "string"},
 			},
+			"formatting_quirks": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"punctuation_habits":  map[string]any{"type": "string"},
+					"capitalization_style": map[string]any{
+						"type": "string",
+						"enum": []string{"proper", "mostly_lowercase", "excessive_caps", "inconsistent"},
+					},
+					"emoji_usage": map[string]any{
+						"type": "string",
+						"enum": []string{"none", "rare", "frequent"},
+					},
+				},
+				"required":             []string{"punctuation_habits", "capitalization_style", "emoji_usage"},
+				"additionalProperties": false,
+			},
 			"review_style": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"detail_level": map[string]any{
+					"verbosity_level": map[string]any{
 						"type": "string",
-						"enum": []string{"brief", "moderate", "detailed"},
+						"enum": []string{"terse", "concise", "verbose", "rambling"},
 					},
-					"use_emotional_lang": map[string]any{"type": "boolean"},
-					"use_tech_language":  map[string]any{"type": "boolean"},
-					"comparison_frequency": map[string]any{
-						"type": "string",
-						"enum": []string{"rare", "occasional", "frequent"},
-					},
+					"use_emotional_lang":   map[string]any{"type": "boolean"},
+					"use_tech_language":    map[string]any{"type": "boolean"},
 				},
-				"required":             []string{"detail_level", "use_emotional_lang", "use_tech_language", "comparison_frequency"},
+				"required":             []string{"verbosity_level", "use_emotional_lang", "use_tech_language"},
 				"additionalProperties": false,
 			},
 			"behavioral_markers": map[string]any{
@@ -140,10 +204,6 @@ func buildProfilerSchema() map[string]any {
 					"type": "object",
 					"properties": map[string]any{
 						"marker": map[string]any{"type": "string"},
-						"frequency": map[string]any{
-							"type": "string",
-							"enum": []string{"rare", "occasional", "frequent"},
-						},
 						"confidence": map[string]any{
 							"type":    "number",
 							"minimum": 0.0,
@@ -151,63 +211,19 @@ func buildProfilerSchema() map[string]any {
 						},
 						"description": map[string]any{"type": "string"},
 					},
-					"required":             []string{"marker", "frequency", "confidence", "description"},
+					"required":             []string{"marker", "confidence", "description"},
 					"additionalProperties": false,
 				},
 			},
 			"tone_profile": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"cheerfulness": map[string]any{
-						"type":    "number",
-						"minimum": 0.0,
-						"maximum": 1.0,
-					},
-					"sarcasm": map[string]any{
-						"type":    "number",
-						"minimum": 0.0,
-						"maximum": 1.0,
-					},
-					"urgency": map[string]any{
-						"type":    "number",
-						"minimum": 0.0,
-						"maximum": 1.0,
-					},
-					"formality": map[string]any{
-						"type":    "number",
-						"minimum": 0.0,
-						"maximum": 1.0,
-					},
+					"cheerfulness": map[string]any{"type": "number", "minimum": 0.0, "maximum": 1.0},
+					"sarcasm":      map[string]any{"type": "number", "minimum": 0.0, "maximum": 1.0},
+					"urgency":      map[string]any{"type": "number", "minimum": 0.0, "maximum": 1.0},
+					"formality":    map[string]any{"type": "number", "minimum": 0.0, "maximum": 1.0},
 				},
 				"required":             []string{"cheerfulness", "sarcasm", "urgency", "formality"},
-				"additionalProperties": false,
-			},
-			"rating_patterns": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"ratings_distribution": map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"1": map[string]any{"type": "integer"},
-							"2": map[string]any{"type": "integer"},
-							"3": map[string]any{"type": "integer"},
-							"4": map[string]any{"type": "integer"},
-							"5": map[string]any{"type": "integer"},
-						},
-						"required":             []string{"1", "2", "3", "4", "5"},
-						"additionalProperties": false,
-					},
-					"rating_thresholds": map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"low":  map[string]any{"type": "number"},
-							"high": map[string]any{"type": "number"},
-						},
-						"required":             []string{"low", "high"},
-						"additionalProperties": false,
-					},
-				},
-				"required":             []string{"ratings_distribution", "rating_thresholds"},
 				"additionalProperties": false,
 			},
 			"topic_preferences": map[string]any{
@@ -220,31 +236,25 @@ func buildProfilerSchema() map[string]any {
 							"type": "string",
 							"enum": []string{"positive", "negative", "neutral"},
 						},
-						"frequency": map[string]any{"type": "integer"},
 						"importance": map[string]any{
 							"type": "string",
 							"enum": []string{"high", "medium", "low"},
 						},
 					},
-					"required":             []string{"topic", "sentiment", "frequency", "importance"},
+					"required":             []string{"topic", "sentiment", "importance"},
 					"additionalProperties": false,
 				},
 			},
-			"review_length": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"average_length": map[string]any{"type": "integer"},
-					"min_length":     map[string]any{"type": "integer"},
-					"max_length":     map[string]any{"type": "integer"},
-				},
-				"required":             []string{"average_length", "min_length", "max_length"},
-				"additionalProperties": false,
+			"cultural_hooks": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+				"description": "Concepts the user cares about that can be localized (e.g. 'values fast delivery', 'complains about high prices')",
 			},
 		},
 		"required": []string{
-			"user_id", "overall_tendency", "average_rating", "preferred_categories",
-			"review_style", "behavioral_markers", "tone_profile", "rating_patterns",
-			"topic_preferences", "review_length",
+			"user_id", "overall_tendency", "consumer_persona", "preferred_categories",
+			"formatting_quirks", "review_style", "behavioral_markers", "tone_profile",
+			"topic_preferences", "cultural_hooks",
 		},
 		"additionalProperties": false,
 	}
