@@ -1,5 +1,13 @@
 package nodes
 
+// ExecutionTiming tracks the duration of each pipeline node in milliseconds.
+type ExecutionTiming struct {
+	ProfilerMs int64 `json:"profiler_ms"`
+	RaterMs    int64 `json:"rater_ms"`
+	DrafterMs  int64 `json:"drafter_ms"`
+	CriticMs   int64 `json:"critic_ms"`
+}
+
 // AgentState represents the core state passed through the review workflow.
 type AgentState struct {
 	UserHistory   []HistoryEntry `json:"user_history"`
@@ -17,6 +25,8 @@ type AgentState struct {
 	Iterations     int    `json:"iterations"`
 
 	FinalReview string `json:"final_review"`
+
+	ExecutionTiming ExecutionTiming `json:"execution_timing"`
 }
 
 // HistoryEntry represents one review from the user's history.
@@ -56,18 +66,39 @@ type UserProfile struct {
 	RatingPatterns      RatingPatterns      `json:"rating_patterns"`
 	TopicPreferences    []TopicPreference   `json:"topic_preferences"`
 	ReviewLength        ReviewLengthProfile `json:"review_length"`
+	ConsumerPersona     string              `json:"consumer_persona"`
+	FormattingQuirks    FormattingQuirks    `json:"formatting_quirks"`
+	CulturalHooks       []string            `json:"cultural_hooks"`
+}
+
+// ProfilerResponse represents the structured output from the Profiler node.
+type ProfilerResponse struct {
+	UserID              string             `json:"user_id"`
+	OverallTendency     string             `json:"overall_tendency"`
+	ConsumerPersona     string             `json:"consumer_persona"`
+	PreferredCategories []string           `json:"preferred_categories"`
+	FormattingQuirks    FormattingQuirks   `json:"formatting_quirks"`
+	ReviewStyle         ReviewStyle        `json:"review_style"`
+	BehavioralMarkers   []BehavioralMarker `json:"behavioral_markers"`
+	ToneProfile         ToneProfile        `json:"tone_profile"`
+	TopicPreferences    []TopicPreference  `json:"topic_preferences"`
+	CulturalHooks       []string           `json:"cultural_hooks"`
+}
+
+type FormattingQuirks struct {
+	PunctuationHabits   string `json:"punctuation_habits"`
+	CapitalizationStyle string `json:"capitalization_style"`
+	EmojiUsage          string `json:"emoji_usage"`
 }
 
 type ReviewStyle struct {
-	DetailLevel      string `json:"detail_level"`
-	UseEmotionalLang bool   `json:"use_emotional_lang"`
-	UseTechLanguage  bool   `json:"use_tech_language"`
-	ComparisonFreq   string `json:"comparison_frequency"`
+	VerbosityLevel     string `json:"verbosity_level"`
+	UseEmotionalLang   bool   `json:"use_emotional_lang"`
+	UseTechLanguage    bool   `json:"use_tech_language"`
 }
 
 type BehavioralMarker struct {
 	Marker      string  `json:"marker"`
-	Frequency   string  `json:"frequency"`
 	Confidence  float64 `json:"confidence"`
 	Description string  `json:"description"`
 }
@@ -79,20 +110,24 @@ type ToneProfile struct {
 	Formality    float64 `json:"formality"`
 }
 
-type RatingPatterns struct {
-	RatingsDistribution map[string]int     `json:"ratings_distribution"`
-	RatingThresholds    map[string]float64 `json:"rating_thresholds"`
-}
-
 type TopicPreference struct {
 	Topic      string `json:"topic"`
 	Sentiment  string `json:"sentiment"`
-	Frequency  int    `json:"frequency"`
 	Importance string `json:"importance"`
 }
 
+type RatingPatterns struct {
+	RatingsDistribution map[string]int   `json:"ratings_distribution"`
+	RatingThresholds    RatingThresholds `json:"rating_thresholds"`
+}
+
+type RatingThresholds struct {
+	Low  float64 `json:"low"`
+	High float64 `json:"high"`
+}
+
 type ReviewLengthProfile struct {
-	AverageLength float64 `json:"average_length"`
-	MinLength     float64 `json:"min_length"`
-	MaxLength     float64 `json:"max_length"`
+	AverageLength int `json:"average_length"`
+	MinLength     int `json:"min_length"`
+	MaxLength     int `json:"max_length"`
 }
