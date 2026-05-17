@@ -22,6 +22,7 @@ type RecommendedItem struct {
 	Domain     string  `json:"domain"`
 	SearchText string  `json:"search_text"`
 	Score      float64 `json:"score"`
+	Reasoning  string  `json:"reasoning,omitempty"` // per-item psychographic fit explanation
 }
 
 // RecommendResponse is the payload returned by POST /recommend.

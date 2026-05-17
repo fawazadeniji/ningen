@@ -17,9 +17,12 @@ services:
 
   # Lightweight Python sidecar for embeddings.
   # Uses ONNX Runtime (CPU) — no Torch, very fast and light.
+  # Port 8001 is exposed for local development (air hot-reload).
   embedder:
     build:
       context: ./embedder_service
+    ports:
+      - "8001:8000"
     environment:
       - MODEL_DIR=/models
     healthcheck:
