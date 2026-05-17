@@ -29,6 +29,10 @@ type GenericOpenAIClient struct {
 func NewGenericOpenAIClient(cfg OpenAIConfig) (*GenericOpenAIClient, error) {
 	opts := make([]option.RequestOption, 0, 4)
 
+	if cfg.Model == "" {
+		return nil, fmt.Errorf("model is required")
+	}
+
 	if cfg.IsAzure {
 		if cfg.AzureEndpoint == "" {
 			return nil, fmt.Errorf("azure endpoint is required")
