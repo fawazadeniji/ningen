@@ -16,7 +16,7 @@ func Profiler(model llm.LLMProvider) func(context.Context, AgentState) (AgentSta
 			return state, fmt.Errorf("user history is empty")
 		}
 
-		// Calculate precise metrics in Go to prevent LLM hallucination
+		// 1. Calculate precise metrics in Go using the FULL history (Fast & Accurate)
 		var totalRating float64
 		distribution := map[string]int{"1": 0, "2": 0, "3": 0, "4": 0, "5": 0}
 
@@ -28,12 +28,12 @@ func Profiler(model llm.LLMProvider) func(context.Context, AgentState) (AgentSta
 			totalRating += entry.StarRating
 
 			// Safely count ratings distribution
-			ratingInt := int(entry.StarRating + 0.5) // Round to nearest star
+			ratingInt := int(entry.StarRating + 0.5)
 			if ratingInt >= 1 && ratingInt <= 5 {
 				distribution[fmt.Sprintf("%d", ratingInt)]++
 			}
 
-			// Calculate exact review lengths (character count)
+			// Calculate exact review lengths
 			textLength := len(entry.ReviewText)
 			totalLength += textLength
 
@@ -44,9 +44,9 @@ func Profiler(model llm.LLMProvider) func(context.Context, AgentState) (AgentSta
 				maxLength = textLength
 			}
 		}
+
 		calculatedAverageRating := totalRating / float64(len(state.UserHistory))
 
-		// Safely compute review lengths
 		averageLength := 0
 		if len(state.UserHistory) > 0 {
 			averageLength = totalLength / len(state.UserHistory)
@@ -61,15 +61,8 @@ func Profiler(model llm.LLMProvider) func(context.Context, AgentState) (AgentSta
 			MaxLength:     maxLength,
 		}
 
-		// Dynamically compute thresholds based on their average
-		lowThreshold := calculatedAverageRating - 1.0
-		if lowThreshold < 1.0 {
-			lowThreshold = 1.0
-		}
-		highThreshold := calculatedAverageRating + 1.0
-		if highThreshold > 5.0 {
-			highThreshold = 5.0
-		}
+		lowThreshold := maxFloat(calculatedAverageRating-1.0, 1.0)
+		highThreshold := minFloat(calculatedAverageRating+1.0, 5.0)
 
 		calculatedRatingPatterns := RatingPatterns{
 			RatingsDistribution: distribution,
@@ -79,10 +72,19 @@ func Profiler(model llm.LLMProvider) func(context.Context, AgentState) (AgentSta
 			},
 		}
 
-		historyStr := buildHistoryContext(state.UserHistory)
+		// 2. SPEED OPTIMIZATION: Only pass the 7 most recent reviews to the LLM.
+		// We don't need 50 reviews to determine someone's writing style.
+		historyStr := buildHistoryContext(state.UserHistory, 7)
 		messages := buildProfilerPrompt(historyStr)
 
-		response, err := model.Complete(ctx, messages, llm.WithJSONSchemaResponse("profiler_response", buildProfilerSchema()))
+		// 3. Ensure you are using a fast model here (e.g., gpt-4o-mini or claude-3-haiku)
+		// Allow per-run override of the model used for the profiler node.
+		opts := []llm.CompletionOption{llm.WithJSONSchemaResponse("profiler_response", buildProfilerSchema())}
+		if m := state.ModelFor("profiler"); m != "" {
+			opts = append(opts, llm.WithModel(m))
+		}
+
+		response, err := model.Complete(ctx, messages, opts...)
 		if err != nil {
 			return state, fmt.Errorf("profiler LLM call failed: %w", err)
 		}
@@ -96,9 +98,9 @@ func Profiler(model llm.LLMProvider) func(context.Context, AgentState) (AgentSta
 			UserID:              profile.UserID,
 			OverallTendency:     profile.OverallTendency,
 			ConsumerPersona:     profile.ConsumerPersona,
-			AverageRating:       calculatedAverageRating,  // Calculated safely in Go
-			RatingPatterns:      calculatedRatingPatterns, // Calculated safely in Go
-			ReviewLength:        calculatedReviewLength,   // Calculated safely in Go
+			AverageRating:       calculatedAverageRating,
+			RatingPatterns:      calculatedRatingPatterns,
+			ReviewLength:        calculatedReviewLength,
 			PreferredCategories: profile.PreferredCategories,
 			FormattingQuirks:    profile.FormattingQuirks,
 			ReviewStyle:         profile.ReviewStyle,
@@ -112,48 +114,56 @@ func Profiler(model llm.LLMProvider) func(context.Context, AgentState) (AgentSta
 	}
 }
 
-func buildHistoryContext(history []HistoryEntry) string {
+// SPEED OPTIMIZATION: Added maxReviews parameter to cap input context size
+func buildHistoryContext(history []HistoryEntry, maxReviews int) string {
 	var sb strings.Builder
-	for i, entry := range history {
-		fmt.Fprintf(&sb, "Review %d:\n", i+1)
-		fmt.Fprintf(&sb, "  Product: %s (Category: %s)\n", entry.ProductName, entry.ProductCategory)
-		fmt.Fprintf(&sb, "  Rating: %.1f stars\n", entry.StarRating)
-		fmt.Fprintf(&sb, "  Source: %s\n", entry.Source)
-		fmt.Fprintf(&sb, "  Text: %s\n", entry.ReviewText)
-		fmt.Fprintf(&sb, "  Date: %s\n\n", entry.ReviewDate)
+
+	start := 0
+	if len(history) > maxReviews {
+		start = len(history) - maxReviews // Take the most recent ones
+	}
+
+	for i := start; i < len(history); i++ {
+		entry := history[i]
+		fmt.Fprintf(&sb, "Review %d:\n", i-start+1)
+		fmt.Fprintf(&sb, "  Product: %s (%s)\n", entry.ProductName, entry.ProductCategory)
+		fmt.Fprintf(&sb, "  Text: %s\n\n", entry.ReviewText)
+		// Removed Rating, Date, and Source here to save input tokens,
+		// since the LLM is focusing purely on stylistic and psychological profiling now.
 	}
 	return sb.String()
 }
 
 // buildProfilerPrompt constructs the prompt for extracting user behavioral patterns.
 func buildProfilerPrompt(historyContext string) []llm.Message {
-	systemInstruction := `You are an expert behavioral psychologist and forensic linguist. Your task is to analyze a user's review history and extract a highly detailed psychological and stylistic profile. 
-You MUST respond with valid JSON matching the exact schema provided. Do not include markdown formatting or explanations.`
+	systemInstruction := `You are an expert behavioral psychologist. Analyze the user's review history and extract a psychological profile. 
+CRITICAL SPEED REQUIREMENT: Keep all text descriptions extremely concise (under 5 words). Output ONLY valid JSON.`
 
-	userInstruction := fmt.Sprintf(`Analyze the following user's review history and extract their behavioral and linguistic profile.
+	// SPEED OPTIMIZATION: Explicitly constrained array lengths and description lengths
+	userInstruction := fmt.Sprintf(`Analyze this user's recent review history:
 
 REVIEW HISTORY:
 %s
 
-Extract the following dimensions:
-1. user_id: A unique identifier for this user (e.g., "user_123").
-2. overall_tendency: "positive", "balanced", or "critical".
-3. consumer_persona: A short descriptor of their shopping identity (e.g., "Bargain Hunter", "Quality Snob", "Impatient Buyer").
-4. preferred_categories: Array of product categories this user reviews most.
-5. formatting_quirks: Crucial for reproducing their exact writing style. Note their punctuation_habits (e.g., "uses excessive exclamation marks", "rarely uses periods"), capitalization_style ("proper", "all_lowercase", "random_caps"), and emoji_usage ("frequent", "none").
-6. review_style: Detail their verbosity_level ("terse", "concise", "verbose", "rambling"), use_emotional_lang (boolean), and use_tech_language (boolean).
-7. behavioral_markers: 2-3 specific behavioral patterns with a confidence score and description (e.g., "price_conscious", "focuses_on_delivery_speed").
-8. tone_profile: Cheerfulness, sarcasm, urgency, formality (0.0 to 1.0).
-9. topic_preferences: 2-3 specific topics they care about (e.g., "customer service", "durability") with sentiment and importance.
-10. cultural_hooks: Keywords or concepts they focus on that can be localized (e.g., "complains about shipping delays", "mentions family size").
+Extract the dimensions into JSON. Follow these strict limits to ensure fast processing:
+1. consumer_persona: Max 3 words (e.g., "Impatient Bargain Hunter").
+2. preferred_categories: Max 2 items.
+3. behavioral_markers: EXACTLY 2 items. Keep 'description' under 5 words.
+4. topic_preferences: EXACTLY 2 items.
+5. cultural_hooks: Max 2 keywords based on Nigerian context.
+6. formatting_quirks & review_style & tone_profile: Fill based on the text provided.
 
-Ensure ALL fields are populated based on the text. Output ONLY the raw JSON object.`, historyContext)
+Do not write long sentences. Use short keywords.`, historyContext)
 
-	return buildMessages(systemInstruction, userInstruction)
+	return []llm.Message{
+		{Role: "system", Content: systemInstruction},
+		{Role: "user", Content: userInstruction},
+	}
 }
 
-// buildProfilerSchema constructs the strict response schema for the Profiler LLM call.
 func buildProfilerSchema() map[string]any {
+	// ... (Your existing schema remains exactly the same, no changes needed here
+	// because the prompt now controls the length of the arrays and strings).
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -246,7 +256,7 @@ func buildProfilerSchema() map[string]any {
 			"cultural_hooks": map[string]any{
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
-				"description": "Concepts the user cares about that can be localized (e.g. 'values fast delivery', 'complains about high prices')",
+				"description": "Concepts the user cares about that can be localized",
 			},
 		},
 		"required": []string{
@@ -256,4 +266,19 @@ func buildProfilerSchema() map[string]any {
 		},
 		"additionalProperties": false,
 	}
+}
+
+// Helpers for min/max
+func maxFloat(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func minFloat(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
 }

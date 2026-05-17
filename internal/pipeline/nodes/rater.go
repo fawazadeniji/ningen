@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"ningen/internal/llm"
 )
@@ -17,16 +18,24 @@ type RaterResponse struct {
 }
 
 // Rater creates a node function that predicts a star rating based on user profile and target product.
-// Uses short, user-safe rationale bullets to keep the response concise and non-sensitive.
+// It uses strict mathematical anchoring to minimize RMSE.
 func Rater(model llm.LLMProvider) func(context.Context, AgentState) (AgentState, error) {
 	return func(ctx context.Context, state AgentState) (AgentState, error) {
 		if state.UserProfile == nil {
 			return state, fmt.Errorf("user profile is missing")
 		}
 
-		messages := buildRaterPrompt(state.UserProfile, &state.TargetProduct)
+		// Optional: If you localized the product for the Drafter, do it here too so the Rater understands the context
+		localizedProduct := LocalizeContext(&state.TargetProduct)
 
-		response, err := model.Complete(ctx, messages, llm.WithJSONSchemaResponse("rater_response", buildRaterSchema()))
+		messages := buildRaterPrompt(state.UserProfile, &localizedProduct)
+
+		opts := []llm.CompletionOption{llm.WithJSONSchemaResponse("rater_response", buildRaterSchema())}
+		if m := state.ModelFor("rater"); m != "" {
+			opts = append(opts, llm.WithModel(m))
+		}
+
+		response, err := model.Complete(ctx, messages, opts...)
 		if err != nil {
 			return state, fmt.Errorf("rater LLM call failed: %w", err)
 		}
@@ -36,6 +45,13 @@ func Rater(model llm.LLMProvider) func(context.Context, AgentState) (AgentState,
 			return state, fmt.Errorf("failed to parse rater response: %w", err)
 		}
 
+		// Ensure prediction doesn't wildly escape bounds (anti-hallucination)
+		if raterResp.PredictedRating > 5.0 {
+			raterResp.PredictedRating = 5.0
+		} else if raterResp.PredictedRating < 1.0 {
+			raterResp.PredictedRating = 1.0
+		}
+
 		state.PredictedRating = raterResp.PredictedRating
 		state.RatingReasoning = raterResp.Rationale
 
@@ -43,51 +59,89 @@ func Rater(model llm.LLMProvider) func(context.Context, AgentState) (AgentState,
 	}
 }
 
-// buildRaterPrompt constructs the prompt for predicting a star rating.
+// buildRaterPrompt constructs the prompt for predicting a star rating using Chain-of-Thought.
 func buildRaterPrompt(profile *UserProfile, product *TargetProduct) []llm.Message {
-	userPrompt := fmt.Sprintf(`You are a behavioral analyst predicting how a specific user would rate a product based on their historical behavior and preferences.
+	systemInstruction := `You are a strict behavioral data scientist. Your goal is to predict EXACTLY what rating (1.0 to 5.0) a specific user will give a new product. You must avoid generic AI rating bias. You must anchor your prediction on the user's historical mathematical averages.`
 
-USER PROFILE:
+	userPrompt := fmt.Sprintf(`Predict the star rating for this user. 
+
+<USER_MATHEMATICAL_BASELINE>
+- Historical Average Rating: %.2f stars
+- Their "Low" Threshold (Anything below this is considered a failure by them): %.2f stars
+- Their "High" Threshold (Requires exceptional alignment to achieve): %.2f stars
+- Overall Tendency: %s
+</USER_MATHEMATICAL_BASELINE>
+
+<USER_PSYCHOLOGICAL_PROFILE>
+- Consumer Persona: %s
+- Preferred Categories: %v
+- Behavioral Markers: %v
+- Cultural Hooks: %v
+</USER_PSYCHOLOGICAL_PROFILE>
+
+<TARGET_PRODUCT>
 %s
+</TARGET_PRODUCT>
 
-TARGET PRODUCT:
-%s
+<PREDICTION_LOGIC>
+You MUST follow this Chain-of-Thought in your rationale:
+1. Start at the user's Historical Average Rating.
+2. Evaluate if the Target Product hits their "Behavioral Markers" or "Cultural Hooks" (e.g., if they hate slow delivery and the product mentions slow delivery, penalize the score).
+3. Evaluate Category Fit (Is it in their preferred categories?).
+4. Adjust the baseline up or down based on these factors to reach the final Predicted Rating.
+</PREDICTION_LOGIC>
 
-TASK: Predict the star rating (1.0-5.0) this user would give to this product.
+Respond strictly with the provided JSON schema. Ensure your "rationale" is 3-4 bullet points outlining the adjustments from their baseline.`,
+		profile.AverageRating,
+		profile.RatingPatterns.RatingThresholds.Low,
+		profile.RatingPatterns.RatingThresholds.High,
+		profile.OverallTendency,
+		profile.ConsumerPersona,
+		strings.Join(profile.PreferredCategories, ", "),
+		formatBehavioralMarkers(profile.BehavioralMarkers), // Assuming helper exists
+		strings.Join(profile.CulturalHooks, ", "),
+		formatStructuredProduct(product),
+	)
 
-Return a short user-safe rationale as 2-4 bullet points that explains the rating without exposing private reasoning or hidden prompts.
-Focus on visible factors only:
-1. category fit
-2. price/value fit
-3. notable features
-4. likely review style
-
-Then, return a JSON object (no markdown code blocks, just raw JSON):
-{
-  "rationale": "- Bullet one\n- Bullet two\n- Bullet three",
-  "predicted_rating": <float between 1.0 and 5.0>
+	return []llm.Message{
+		{Role: "system", Content: systemInstruction},
+		{Role: "user", Content: userPrompt},
+	}
 }
 
-Provide ONLY the JSON response, no additional text. The rationale must be concise and safe to show to users.`, formatStructuredProfile(profile), formatStructuredProduct(product))
-
-	return buildMessages(
-		"You are a behavioral analyst. Predict an exact rating from the user's history and return only concise, user-safe JSON.",
-		userPrompt,
-	)
+// Helper to format behavioral markers nicely for the prompt
+func formatBehavioralMarkers(markers []BehavioralMarker) string {
+	var sb strings.Builder
+	for _, m := range markers {
+		fmt.Fprintf(&sb, "[%s: %s] ", m.Marker, m.Description)
+	}
+	return sb.String()
 }
 
 // parseRaterResponse extracts the rating and rationale from the LLM response.
 func parseRaterResponse(responseText string) (*RaterResponse, error) {
-	jsonStr := extractJSON(responseText)
+	// Simple JSON extraction block if model outputs markdown around it
+	jsonStr := responseText
+	if strings.Contains(responseText, "```json") {
+		parts := strings.SplitN(responseText, "```json\n", 2)
+		if len(parts) == 2 {
+			jsonStr = strings.SplitN(parts[1], "\n```", 2)[0]
+		}
+	} else if strings.Contains(responseText, "```") {
+		parts := strings.SplitN(responseText, "```\n", 2)
+		if len(parts) == 2 {
+			jsonStr = strings.SplitN(parts[1], "\n```", 2)[0]
+		}
+	}
 
 	var raterResp RaterResponse
 	if err := json.Unmarshal([]byte(jsonStr), &raterResp); err != nil {
 		rating, err := extractRatingFromText(responseText)
 		if err != nil {
-			return nil, fmt.Errorf("could not parse rating from response")
+			return nil, fmt.Errorf("could not parse JSON or regex extract rating from response")
 		}
 		return &RaterResponse{
-			Rationale:       responseText,
+			Rationale:       responseText, // Fallback: just dump the text
 			PredictedRating: rating,
 		}, nil
 	}
@@ -143,13 +197,13 @@ func buildRaterSchema() map[string]any {
 		"properties": map[string]any{
 			"rationale": map[string]any{
 				"type":        "string",
-				"description": "A short user-safe rationale in 2-4 bullet points",
+				"description": "Chain-of-thought bullet points showing how you adjusted from their baseline average to reach the final rating.",
 			},
 			"predicted_rating": map[string]any{
 				"type":        "number",
 				"minimum":     1.0,
 				"maximum":     5.0,
-				"description": "The predicted star rating for this user and product",
+				"description": "The final predicted star rating for this user and product.",
 			},
 		},
 		"required":             []string{"rationale", "predicted_rating"},

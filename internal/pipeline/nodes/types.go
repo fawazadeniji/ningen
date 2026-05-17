@@ -12,8 +12,11 @@ type ExecutionTiming struct {
 type AgentState struct {
 	UserHistory   []HistoryEntry `json:"user_history"`
 	TargetProduct TargetProduct  `json:"target_product"`
-
-	UserProfile *UserProfile `json:"user_profile"`
+	// ModelOverrides allows specifying per-node model overrides for a single run.
+	// Keys are node names: "profiler", "rater", "drafter", "critic".
+	// Values are model identifiers (e.g. "gpt-5.4-mini"). Empty means use provider default.
+	ModelOverrides map[string]string `json:"model_overrides"`
+	UserProfile    *UserProfile      `json:"user_profile"`
 
 	PredictedRating float64 `json:"predicted_rating"`
 	RatingReasoning string  `json:"rating_reasoning"`
@@ -27,6 +30,14 @@ type AgentState struct {
 	FinalReview string `json:"final_review"`
 
 	ExecutionTiming ExecutionTiming `json:"execution_timing"`
+}
+
+// ModelFor returns the model override for a given node, or empty string if none.
+func (s *AgentState) ModelFor(node string) string {
+	if s == nil || s.ModelOverrides == nil {
+		return ""
+	}
+	return s.ModelOverrides[node]
 }
 
 // HistoryEntry represents one review from the user's history.

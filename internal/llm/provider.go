@@ -17,6 +17,7 @@ type CompletionOption func(*completionConfig)
 
 type completionConfig struct {
 	responseFormat *openai.ChatCompletionNewParamsResponseFormatUnion
+	modelOverride  string
 }
 
 // WithJSONSchemaResponse instructs the model to return structured JSON that
@@ -32,6 +33,13 @@ func WithJSONSchemaResponse(name string, schema map[string]any) CompletionOption
 				},
 			},
 		}
+	}
+}
+
+// WithModel allows overriding the provider model for a single completion call.
+func WithModel(model string) CompletionOption {
+	return func(cfg *completionConfig) {
+		cfg.modelOverride = model
 	}
 }
 

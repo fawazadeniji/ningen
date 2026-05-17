@@ -86,6 +86,9 @@ func (c *GenericOpenAIClient) call(ctx context.Context, messages []Message, opts
 		Messages: chatMessages,
 		Model:    openai.ChatModel(c.cfg.Model),
 	}
+	if config.modelOverride != "" {
+		params.Model = openai.ChatModel(config.modelOverride)
+	}
 	if config.responseFormat != nil {
 		params.ResponseFormat = *config.responseFormat
 	}
