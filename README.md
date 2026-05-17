@@ -180,18 +180,20 @@ Returns `200 OK` when the API server is ready. Used by Docker health checks.
 
 Copy `.env.example` to `.env`. At least one LLM key is required or the API server will refuse to start.
 
-| Variable           | Description                                             |
-| ------------------ | ------------------------------------------------------- |
-| `MOONSHOT_API_KEY` | Kimi (Moonshot AI) API key                              |
-| `GEMINI_API_KEY`   | Google Gemini API key                                   |
-| `OPENAI_API_KEY`   | OpenAI API key                                          |
-| `OPENAI_MODEL`     | Override OpenAI model (default: `gpt-4o-mini`)          |
-| `GEMINI_MODEL`     | Override Gemini model (default: `gemini-1.5-flash`)     |
-| `AZURE_OPENAI_URL` | Azure OpenAI endpoint URL (replaces `OPENAI_API_KEY`)   |
-| `AZURE_OPENAI_KEY` | Azure OpenAI key                                        |
-| `DB_URL`           | Postgres connection string (auto-set in docker-compose) |
-| `EMBEDDER_URL`     | Embedder sidecar URL (auto-set in docker-compose)       |
-| `PORT`             | API server port (default: `8080`)                       |
+| Variable                   | Description                                                      |
+| -------------------------- | ---------------------------------------------------------------- |
+| `MOONSHOT_API_KEY`         | Kimi (Moonshot AI) API key                                       |
+| `GEMINI_API_KEY`           | Google Gemini API key                                            |
+| `OPENAI_API_KEY`           | OpenAI API key                                                   |
+| `OPENAI_MODEL`             | Override non-Azure OpenAI model (default: `gpt-4o-mini`)         |
+| `GEMINI_MODEL`             | Override Gemini model (default: `gemini-1.5-flash`)              |
+| `AZURE_OPENAI_URL`         | Azure OpenAI endpoint URL (used instead of `OPENAI_API_KEY`)     |
+| `AZURE_OPENAI_KEY`         | Azure OpenAI key                                                 |
+| `AZURE_OPENAI_MODEL`       | Azure OpenAI deployment/model name                               |
+| `AZURE_OPENAI_API_VERSION` | Azure OpenAI API version override (optional)                     |
+| `DB_URL`                   | Postgres connection string (auto-set in docker-compose)          |
+| `EMBEDDER_URL`             | Embedder sidecar URL (auto-set in docker-compose)                |
+| `PORT`                     | API server port (default: `8080`)                                |
 
 ---
 

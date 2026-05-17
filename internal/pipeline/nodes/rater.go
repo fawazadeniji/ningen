@@ -121,10 +121,17 @@ func extractRatingFromText(text string) (float64, error) {
 		return strconv.ParseFloat(matches[1], 64)
 	}
 
-	re = regexp.MustCompile(`\b([1-5]\.\d+|[1-5])\b`)
-	matches = re.FindStringSubmatch(text)
-	if len(matches) > 1 {
-		return strconv.ParseFloat(matches[1], 64)
+	fallbackPatterns := []*regexp.Regexp{
+		regexp.MustCompile(`(?i)\bpredicted[_\s]*rating\b\s*[:=]\s*([1-5](?:\.\d+)?)\b`),
+		regexp.MustCompile(`(?i)\brating\b\s*[:=]\s*([1-5](?:\.\d+)?)\b`),
+		regexp.MustCompile(`(?i)\brating\b\s+(?:is|was)\s+([1-5](?:\.\d+)?)\b`),
+	}
+
+	for _, re := range fallbackPatterns {
+		matches = re.FindStringSubmatch(text)
+		if len(matches) > 1 {
+			return strconv.ParseFloat(matches[1], 64)
+		}
 	}
 
 	return 0, fmt.Errorf("could not extract rating from text")
