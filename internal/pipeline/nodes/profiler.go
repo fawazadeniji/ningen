@@ -76,11 +76,25 @@ func buildHistoryContext(history []HistoryEntry) string {
 // buildProfilerPrompt constructs the prompt for extracting user behavioral patterns.
 func buildProfilerPrompt(historyContext string) []llm.Message {
 	return buildMessages(
-		"You are an expert behavioral analyst. Extract a structured profile from review history.",
+		"You are an expert behavioral analyst. Extract a structured profile from review history. You MUST respond with only valid JSON, no markdown, no explanation.",
 		fmt.Sprintf(`Analyze the following user's review history and extract their behavioral profile.
 
 REVIEW HISTORY:
-%s`, historyContext),
+%s
+
+RESPOND WITH VALID JSON ONLY. Extract and compute ALL of these fields:
+1. user_id: A unique identifier for this user (e.g., "user_123")
+2. overall_tendency: One of "positive", "balanced", or "critical" based on average sentiment
+3. average_rating: Compute the mean of all star_rating values (e.g., 3.75)
+4. preferred_categories: Array of product categories this user reviews most (e.g., ["electronics", "books"])
+5. review_style: Object with: detail_level ("brief"|"moderate"|"detailed"), use_emotional_lang (true|false), use_tech_language (true|false), comparison_frequency ("rare"|"occasional"|"frequent")
+6. behavioral_markers: Array of behavioral patterns, each with marker, frequency, confidence (0.0-1.0), and description. Example: [{"marker": "price_conscious", "frequency": "frequent", "confidence": 0.85, "description": "Watches for discounts"}]. INCLUDE AT LEAST 2-3 markers.
+7. tone_profile: Object with cheerfulness, sarcasm, urgency, formality (each 0.0-1.0, e.g., 0.5)
+8. rating_patterns: Object with ratings_distribution (e.g., {"3": 2, "4": 3, "5": 1}) showing count per rating, and rating_thresholds (e.g., {"high_satisfaction": 4.5, "acceptable": 3.0})
+9. topic_preferences: Array of topics the user mentions, each with topic (string), sentiment ("positive"|"negative"|"neutral"), frequency (count), and importance ("high"|"medium"|"low"). Example: [{"topic": "battery_life", "sentiment": "positive", "frequency": 2, "importance": "high"}]. INCLUDE 2-3 topics minimum.
+10. review_length: Object with average_length, min_length, max_length (length of reviews in characters). Example: {"average_length": 95.5, "min_length": 40, "max_length": 180}
+
+Ensure ALL fields are populated. Output ONLY the JSON object, no explanation or markdown.`, historyContext),
 	)
 }
 
@@ -172,12 +186,25 @@ func buildProfilerSchema() map[string]any {
 				"type": "object",
 				"properties": map[string]any{
 					"ratings_distribution": map[string]any{
-						"type":                 "object",
-						"additionalProperties": map[string]any{"type": "integer"},
+						"type": "object",
+						"properties": map[string]any{
+							"1": map[string]any{"type": "integer"},
+							"2": map[string]any{"type": "integer"},
+							"3": map[string]any{"type": "integer"},
+							"4": map[string]any{"type": "integer"},
+							"5": map[string]any{"type": "integer"},
+						},
+						"required":             []string{"1", "2", "3", "4", "5"},
+						"additionalProperties": false,
 					},
 					"rating_thresholds": map[string]any{
-						"type":                 "object",
-						"additionalProperties": map[string]any{"type": "number"},
+						"type": "object",
+						"properties": map[string]any{
+							"low":  map[string]any{"type": "number"},
+							"high": map[string]any{"type": "number"},
+						},
+						"required":             []string{"low", "high"},
+						"additionalProperties": false,
 					},
 				},
 				"required":             []string{"ratings_distribution", "rating_thresholds"},
