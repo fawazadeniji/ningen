@@ -7,10 +7,10 @@ tmp_dir = "tmp"
   bin     = "./tmp/api"
   full_bin = "./tmp/api"
 
-  # Rebuild triggers
-  include_ext = ["go", "env"]
-  exclude_dir = ["tmp", "vendor", ".git"]
-  include_dir = ["cmd", "internal"]
+  # Watch all Go packages, not just cmd/internal
+  include_ext = ["go"]
+  exclude_dir = ["tmp", "vendor", ".git", "scripts", "scratch"]
+  include_dir = ["cmd", "internal", "embed", "store", "ingest", "domain"]
 
   # Stop the old process before starting the new one
   send_interrupt = true

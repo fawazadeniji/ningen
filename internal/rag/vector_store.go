@@ -3,6 +3,7 @@ package rag
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -110,6 +111,41 @@ func (vs *VectorStore) SearchByText(ctx context.Context, query string, limit int
 	}
 
 	return results, rows.Err()
+}
+
+// SearchByVectors runs one HNSW query per embedding vector and unions the results.
+// Results are deduplicated by item_id, keeping the best (lowest) cosine distance per item.
+// The returned slice is sorted ascending by score and capped at limit.
+func (vs *VectorStore) SearchByVectors(ctx context.Context, vecs [][]float32, limit int) ([]Result, error) {
+	seen := make(map[string]Result)
+	var lastErr error
+	for _, vec := range vecs {
+		results, err := vs.Search(ctx, vec, limit, nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		for _, r := range results {
+			if existing, ok := seen[r.ItemID]; !ok || r.Score < existing.Score {
+				seen[r.ItemID] = r
+			}
+		}
+	}
+	if len(seen) == 0 && lastErr != nil {
+		return nil, lastErr
+	}
+
+	merged := make([]Result, 0, len(seen))
+	for _, r := range seen {
+		merged = append(merged, r)
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		return merged[i].Score < merged[j].Score
+	})
+	if limit > 0 && len(merged) > limit {
+		merged = merged[:limit]
+	}
+	return merged, nil
 }
 
 // formatVector converts a float32 slice to the Postgres vector literal '[a,b,c,...]'.
