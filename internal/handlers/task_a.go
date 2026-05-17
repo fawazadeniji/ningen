@@ -14,9 +14,10 @@ import (
 
 // GenerateReviewRequest is the payload for POST /generate-review.
 type GenerateReviewRequest struct {
-	UserHistory   []ReviewHistoryEntry `json:"user_history"`
-	TargetProduct ReviewTargetProduct  `json:"target_product"`
-	Provider      string               `json:"provider"`
+	UserHistory    []ReviewHistoryEntry `json:"user_history"`
+	TargetProduct  ReviewTargetProduct  `json:"target_product"`
+	Provider       string               `json:"provider"`
+	ModelOverrides map[string]string    `json:"model_overrides"` // Optional: per-node model overrides
 }
 
 // ReviewHistoryEntry describes one item from the user's prior review history.
@@ -81,8 +82,9 @@ func GenerateReviewHandler(d *Deps) http.HandlerFunc {
 		defer cancel()
 
 		state, err := pipeline.ExecuteWorkflow(ctx, model, pipeline.AgentState{
-			UserHistory:   req.UserHistory,
-			TargetProduct: req.TargetProduct,
+			UserHistory:    req.UserHistory,
+			TargetProduct:  req.TargetProduct,
+			ModelOverrides: req.ModelOverrides,
 		})
 		if err != nil {
 			// Check if it's a workflow error with node information

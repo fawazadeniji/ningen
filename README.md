@@ -180,20 +180,20 @@ Returns `200 OK` when the API server is ready. Used by Docker health checks.
 
 Copy `.env.example` to `.env`. At least one LLM key is required or the API server will refuse to start.
 
-| Variable                   | Description                                                      |
-| -------------------------- | ---------------------------------------------------------------- |
-| `MOONSHOT_API_KEY`         | Kimi (Moonshot AI) API key                                       |
-| `GEMINI_API_KEY`           | Google Gemini API key                                            |
-| `OPENAI_API_KEY`           | OpenAI API key                                                   |
-| `OPENAI_MODEL`             | Override non-Azure OpenAI model (default: `gpt-4o-mini`)         |
-| `GEMINI_MODEL`             | Override Gemini model (default: `gemini-1.5-flash`)              |
-| `AZURE_OPENAI_URL`         | Azure OpenAI endpoint URL (used instead of `OPENAI_API_KEY`)     |
-| `AZURE_OPENAI_KEY`         | Azure OpenAI key                                                 |
-| `AZURE_OPENAI_MODEL`       | Azure OpenAI deployment/model name                               |
-| `AZURE_OPENAI_API_VERSION` | Azure OpenAI API version override (optional)                     |
-| `DB_URL`                   | Postgres connection string (auto-set in docker-compose)          |
-| `EMBEDDER_URL`             | Embedder sidecar URL (auto-set in docker-compose)                |
-| `PORT`                     | API server port (default: `8080`)                                |
+| Variable                   | Description                                                  |
+| -------------------------- | ------------------------------------------------------------ |
+| `MOONSHOT_API_KEY`         | Kimi (Moonshot AI) API key                                   |
+| `GEMINI_API_KEY`           | Google Gemini API key                                        |
+| `OPENAI_API_KEY`           | OpenAI API key                                               |
+| `OPENAI_MODEL`             | Override non-Azure OpenAI model (default: `gpt-4o-mini`)     |
+| `GEMINI_MODEL`             | Override Gemini model (default: `gemini-1.5-flash`)          |
+| `AZURE_OPENAI_URL`         | Azure OpenAI endpoint URL (used instead of `OPENAI_API_KEY`) |
+| `AZURE_OPENAI_KEY`         | Azure OpenAI key                                             |
+| `AZURE_OPENAI_MODEL`       | Azure OpenAI deployment/model name                           |
+| `AZURE_OPENAI_API_VERSION` | Azure OpenAI API version override (optional)                 |
+| `DB_URL`                   | Postgres connection string (auto-set in docker-compose)      |
+| `EMBEDDER_URL`             | Embedder sidecar URL (auto-set in docker-compose)            |
+| `PORT`                     | API server port (default: `8080`)                            |
 
 ---
 
@@ -317,16 +317,34 @@ mux.HandleFunc("POST /generate-review", handlers.GenerateReviewHandler(deps))
     "rating": 4.4,
     "review_count": 152
   },
-  "provider": "kimi"
+  "provider": "openai",
+  "model_overrides": {
+    "profiler": "gpt-5.4-mini",
+    "rater": "gpt-5.4",
+    "drafter": "gpt-5.4",
+    "critic": "gpt-5.4"
+  }
 }
 ```
+
+**Optional per-node model overrides:**
+
+The `model_overrides` field (optional) allows specifying different LLM models for each pipeline node:
+
+- `profiler` — override for the Profiler node (user behavioral analysis)
+- `rater` — override for the Rater node (rating prediction)
+- `drafter` — override for the Drafter node (review text generation)
+- `critic` — override for the Critic node (behavioral fidelity QA)
+
+If a node is omitted or the entire `model_overrides` field is absent, the provider's default model is used. This enables fine-grained control — for example, using a fast model like `gpt-5.4-mini` for profiling/drafting while using a more capable model like `gpt-5.4` for critical rating decisions.
 
 Validation rules currently enforced in handler:
 
 - `user_history` must be non-empty
 - `target_product.product_id` is required
-- `provider` defaults to `kimi` if omitted
+- `provider` defaults to `openai` if omitted
 - unknown/unavailable provider returns `400`
+- `model_overrides` is optional; if provided, model names must be valid for the provider
 
 ### Response Schema
 
@@ -401,6 +419,39 @@ Notes on current behavior:
 
 - Task A request/response structs are defined in handler/pipeline packages, not in [internal/models/schemas.go](internal/models/schemas.go).
 - Task A currently uses provider `Complete` calls in pipeline nodes; it does not run a final `Humanize` pass like Task B.
+
+### Per-Node Model Configuration (Model Overrides)
+
+Each pipeline node (Profiler, Rater, Drafter, Critic) can use a different LLM model via the `model_overrides` field in the request. This is useful for:
+
+- **Cost optimization**: Use fast, cheap models (e.g., `gpt-5.4-mini`) for less critical nodes like Drafter, and more capable models (e.g., `gpt-4o`) for critical decisions like Rater.
+- **Latency tuning**: Route fast profiling to a lightweight model while keeping rating prediction on a more accurate one.
+- **A/B testing**: Compare outputs across models without changing infrastructure.
+
+**Implementation:**
+
+- `AgentState.ModelOverrides` (map of node name → model string) is passed through the pipeline
+- Each node queries `state.ModelFor("<nodename>")` to check for an override
+- If present, the override is passed to the LLM provider via `llm.WithModel()` option
+- The provider applies the override at the API call level without affecting the base provider configuration
+
+**Example usage:**
+
+```go
+state := pipeline.AgentState{
+    UserHistory: [...],
+    TargetProduct: {...},
+    ModelOverrides: map[string]string{
+        "profiler": "gpt-5.4-mini",
+        "rater":    "gpt-4o",         // More accurate for ratings
+        "drafter":  "gpt-5.4-mini",   // Speed for drafting
+        "critic":   "gpt-4o",         // Strict validation
+    },
+}
+finalState, err := pipeline.ExecuteWorkflow(ctx, model, state)
+```
+
+All nodes support model overrides. See [internal/pipeline/nodes/model_overrides_test.go](internal/pipeline/nodes/model_overrides_test.go) for comprehensive test coverage.
 
 ---
 
