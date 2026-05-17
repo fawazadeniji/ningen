@@ -51,7 +51,7 @@ func TestGenerateReviewHandler_EndToEnd(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /generate_review", GenerateReviewHandler(deps))
+	mux.HandleFunc("POST /generate-review", GenerateReviewHandler(deps))
 
 	payload := GenerateReviewRequest{
 		UserHistory: []ReviewHistoryEntry{
@@ -94,7 +94,7 @@ func TestGenerateReviewHandler_EndToEnd(t *testing.T) {
 		t.Fatalf("marshal request: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/generate_review", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/generate-review", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 

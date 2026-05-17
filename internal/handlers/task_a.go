@@ -7,7 +7,7 @@ import (
 	"ningen/internal/pipeline"
 )
 
-// GenerateReviewRequest is the payload for POST /generate_review.
+// GenerateReviewRequest is the payload for POST /generate-review.
 type GenerateReviewRequest struct {
 	UserHistory   []ReviewHistoryEntry `json:"user_history"`
 	TargetProduct ReviewTargetProduct  `json:"target_product"`
