@@ -3,7 +3,7 @@ package pipeline
 import (
 	"context"
 	"errors"
-	"fmt"
+	"time"
 
 	"ningen/internal/llm"
 	"ningen/internal/pipeline/nodes"
@@ -28,38 +28,56 @@ func BuildGraph(model llm.LLMProvider) (*Workflow, error) {
 }
 
 // InvokeGraph runs the workflow from the provided initial state.
+// It measures execution time for each node and ensures FinalReview is always set.
 func InvokeGraph(ctx context.Context, workflow *Workflow, initialState AgentState) (AgentState, error) {
 	if workflow == nil {
 		return AgentState{}, errors.New("workflow is nil")
 	}
 
 	state := initialState
+	state.ExecutionTiming = nodes.ExecutionTiming{}
 	var err error
 
+	// Profiler
+	start := time.Now()
 	state, err = nodes.Profiler(workflow.llm)(ctx, state)
+	state.ExecutionTiming.ProfilerMs = time.Since(start).Milliseconds()
 	if err != nil {
-		return AgentState{}, fmt.Errorf("profiler step failed: %w", err)
+		return AgentState{}, NewWorkflowError("profiler", err)
 	}
 
+	// Rater
+	start = time.Now()
 	state, err = nodes.Rater(workflow.llm)(ctx, state)
+	state.ExecutionTiming.RaterMs = time.Since(start).Milliseconds()
 	if err != nil {
-		return AgentState{}, fmt.Errorf("rater step failed: %w", err)
+		return AgentState{}, NewWorkflowError("rater", err)
 	}
 
+	// Drafter + Critic loop
 	for {
+		start = time.Now()
 		state, err = nodes.Drafter(workflow.llm)(ctx, state)
+		state.ExecutionTiming.DrafterMs = time.Since(start).Milliseconds()
 		if err != nil {
-			return AgentState{}, fmt.Errorf("drafter step failed: %w", err)
+			return AgentState{}, NewWorkflowError("drafter", err)
 		}
 
+		start = time.Now()
 		state, err = nodes.Critic(workflow.llm)(ctx, state)
+		state.ExecutionTiming.CriticMs = time.Since(start).Milliseconds()
 		if err != nil {
-			return AgentState{}, fmt.Errorf("critic step failed: %w", err)
+			return AgentState{}, NewWorkflowError("critic", err)
 		}
 
 		if state.CriticVerdict == "PASS" || state.Iterations >= maxLoops {
+			// Ensure FinalReview is always set
 			if state.FinalReview == "" {
 				state.FinalReview = state.DraftReview
+			}
+			// Set verdict to indicate why the loop ended
+			if state.CriticVerdict != "PASS" {
+				state.CriticVerdict = "MAX_ITERATIONS"
 			}
 			return state, nil
 		}
