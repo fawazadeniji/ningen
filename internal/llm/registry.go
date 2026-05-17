@@ -54,13 +54,17 @@ func Build() (Registry, error) {
 		if apiVersion == "" {
 			apiVersion = "2024-06-01"
 		}
+		model := os.Getenv("AZURE_OPENAI_MODEL")
+		if model == "" {
+			return nil, fmt.Errorf("init azure openai provider: AZURE_OPENAI_MODEL is required")
+		}
 		provider, err := NewGenericOpenAIClient(OpenAIConfig{
 			Name:            "openai",
 			APIKey:          azureKey,
 			IsAzure:         true,
 			AzureEndpoint:   azureURL,
 			AzureAPIVersion: apiVersion,
-			Model:           os.Getenv("AZURE_OPENAI_MODEL"),
+			Model:           model,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("init azure openai provider: %w", err)
@@ -84,7 +88,7 @@ func Build() (Registry, error) {
 	}
 
 	if len(reg) == 0 {
-		return nil, fmt.Errorf("no LLM providers available: set MOONSHOT_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY")
+		return nil, fmt.Errorf("no LLM providers available: set MOONSHOT_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY, or AZURE_OPENAI_URL, AZURE_OPENAI_KEY, and AZURE_OPENAI_MODEL")
 	}
 
 	return reg, nil
