@@ -39,3 +39,9 @@ type RecommendResponse struct {
 type ErrorResponse struct {
 	Error string `json:"error"`
 }
+
+// DetailedErrorResponse provides structured error information with additional context.
+type DetailedErrorResponse struct {
+	Error   string         `json:"error"`
+	Details map[string]any `json:"details,omitempty"`
+}
