@@ -119,8 +119,12 @@ func (vs *VectorStore) SearchByText(ctx context.Context, query string, limit int
 func (vs *VectorStore) SearchByVectors(ctx context.Context, vecs [][]float32, limit int) ([]Result, error) {
 	seen := make(map[string]Result)
 	var lastErr error
+	perQuery := limit * 2
+	if perQuery > 200 {
+		perQuery = 200
+	}
 	for _, vec := range vecs {
-		results, err := vs.Search(ctx, vec, limit, nil)
+		results, err := vs.Search(ctx, vec, perQuery, nil)
 		if err != nil {
 			lastErr = err
 			continue

@@ -110,10 +110,12 @@ func buildExtractionPrompt(persona string, history []models.ConversationTurn, ex
 func cleanJSON(s string) string {
 	s = strings.TrimSpace(s)
 	if strings.HasPrefix(s, "```") {
-		if i := strings.Index(s, "\n"); i != -1 {
-			s = s[i+1:]
+		leadEnd := strings.Index(s, "\n")
+		if leadEnd != -1 {
+			s = s[leadEnd+1:]
 		}
-		if i := strings.LastIndex(s, "```"); i != -1 {
+		// Only strip trailing fence if it is genuinely distinct from the opening line.
+		if i := strings.LastIndex(s, "```"); i > 0 {
 			s = s[:i]
 		}
 	}

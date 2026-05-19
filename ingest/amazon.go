@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"ningen/domain"
-
-	"github.com/google/uuid"
 )
 
 type AmazonGzJsonl struct {
@@ -71,11 +69,15 @@ func (s *AmazonGzJsonl) Stream(ctx context.Context, out chan<- domain.Item) erro
 		}
 
 		meta, _ := json.Marshal(map[string]float64{"rating": rating})
-		out <- domain.Item{
-			ID:         uuid.NewString(),
+		select {
+		case out <- domain.Item{
+			ID:         deterministicID("amazon", text),
 			Domain:     "amazon",
 			Metadata:   string(meta),
 			SearchText: text,
+		}:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 

@@ -31,7 +31,7 @@ Rules:
 - ranked_ids must contain the item_ids of ALL provided candidates, ordered best to worst.
 - item_reasoning must cover at least the top 10 items by rank.
 - overall_reasoning is the narrative shown to the user — write it warmly and directly to them.
-- Hard constraints in the signal must be respected: do not rank constraint-violating items highly.
+- Hard constraints are NON-NEGOTIABLE: any item that violates a stated constraint MUST be placed at the very bottom of ranked_ids, below every constraint-satisfying item. The top-N slots must be exclusively constraint-satisfying items.
 - Cross-domain flag: if cross_domain=true, freely mix categories. If false, prefer same-domain items.`
 
 // RerankResult holds the psychographic reranker's output.

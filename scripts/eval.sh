@@ -7,6 +7,8 @@
 #   ./scripts/eval.sh http://host:port    # custom target
 #   PROVIDER=kimi ./scripts/eval.sh       # test a specific LLM provider
 
+set -euo pipefail
+
 BASE="${1:-http://localhost:8080}"
 PROVIDER="${PROVIDER:-gemini}"
 

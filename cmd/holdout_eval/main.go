@@ -28,7 +28,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
+	"time"
 
 	"ningen/domain"
 	"ningen/embed"
@@ -88,10 +88,7 @@ func main() {
 
 	embedder := embed.NewSidecarEmbedder(embedURL)
 
-	var (
-		mu         sync.Mutex
-		allResults []seedResult
-	)
+	var allResults []seedResult
 
 	type domainJob struct {
 		name   string
@@ -139,9 +136,7 @@ func main() {
 		results := evaluateDomain(ctx, pool, embedder, apiURL, provider, texts, job.query, job.persona, gtThresh)
 		printDomainReport(job.name, results)
 
-		mu.Lock()
 		allResults = append(allResults, results...)
-		mu.Unlock()
 	}
 
 	fmt.Printf("\n%s\n", strings.Repeat("═", 60))
@@ -292,6 +287,8 @@ func callAPIWithFollowThrough(apiURL, provider, persona, query, seedText string)
 }
 
 // callRecommend sends one POST /recommend. Returns (item_ids, requiresInput, question, err).
+var httpClient = &http.Client{Timeout: 120 * time.Second}
+
 func callRecommend(apiURL, provider, persona string, history []map[string]string) ([]string, bool, string, error) {
 	body, _ := json.Marshal(map[string]any{
 		"user_persona": persona,
@@ -299,7 +296,7 @@ func callRecommend(apiURL, provider, persona string, history []map[string]string
 		"limit":        topK,
 		"provider":     provider,
 	})
-	resp, err := http.Post(apiURL+"/recommend", "application/json", bytes.NewReader(body))
+	resp, err := httpClient.Post(apiURL+"/recommend", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return nil, false, "", err
 	}
@@ -490,11 +487,11 @@ func checkHealth(apiURL string) error {
 	return nil
 }
 
-func truncate(s string, max int) string {
-	if len(s) <= max {
+func truncate(s string, n int) string {
+	if len(s) <= n {
 		return s
 	}
-	return s[:max]
+	return s[:n]
 }
 
 func envOr(key, fallback string) string {
@@ -524,9 +521,3 @@ func envFloat(key string, fallback float64) float64 {
 	return fallback
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

@@ -49,6 +49,8 @@ func (s *PostgresStore) Init(ctx context.Context) error {
 			embedding VECTOR(384),
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);`,
+		// Migration: add created_at to tables created before this column existed.
+		`ALTER TABLE items ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();`,
 	}
 
 	for _, q := range queries {
@@ -73,28 +75,27 @@ func (s *PostgresStore) BulkInsert(ctx context.Context, items []domain.Item) err
 		return nil
 	}
 
-	rows := make([][]interface{}, 0, len(items))
+	batch := &pgx.Batch{}
 	for _, item := range items {
-		rows = append(rows, []interface{}{
+		batch.Queue(
+			`INSERT INTO items (item_id, domain, metadata, search_text, embedding)
+			 VALUES ($1, $2, $3, $4, $5)
+			 ON CONFLICT (item_id) DO NOTHING`,
 			item.ID,
 			item.Domain,
 			item.Metadata,
 			item.SearchText,
 			pgvector.NewVector(item.Embedding),
-		})
+		)
 	}
 
-	_, err := s.pool.CopyFrom(
-		ctx,
-		pgx.Identifier{"items"},
-		[]string{"item_id", "domain", "metadata", "search_text", "embedding"},
-		pgx.CopyFromRows(rows),
-	)
-
-	if err != nil {
-		return fmt.Errorf("bulk insert copy from: %w", err)
+	br := s.pool.SendBatch(ctx, batch)
+	defer br.Close()
+	for range items {
+		if _, err := br.Exec(); err != nil {
+			return fmt.Errorf("bulk insert: %w", err)
+		}
 	}
-
 	return nil
 }
 

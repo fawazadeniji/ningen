@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"context"
+	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"ningen/internal/agents"
@@ -64,7 +66,9 @@ func RecommendHandler(d *Deps) http.HandlerFunc {
 		// Pre-search: embed the raw last user turn to sample corpus examples.
 		// These ground the Extractor in what actually exists in the DB before it
 		// generates search queries, preventing queries for items that don't exist.
-		corpusExamples := sampleCorpus(ctx, d, req.History)
+		sampleCtx, sampleCancel := context.WithTimeout(ctx, agentTimeout)
+		corpusExamples := sampleCorpus(sampleCtx, d, req.History)
+		sampleCancel()
 
 		// Stage 1 — Signal Extraction (corpus-aware)
 		extractCtx, extractCancel := context.WithTimeout(ctx, agentTimeout)
@@ -76,7 +80,7 @@ func RecommendHandler(d *Deps) http.HandlerFunc {
 		}
 
 		if signal.ClarifyNeeded {
-			question := signal.ClarifyReason
+			question := strings.TrimSpace(signal.ClarifyReason)
 			if question == "" {
 				question = fallbackClarifyQ
 			}
@@ -113,16 +117,22 @@ func RecommendHandler(d *Deps) http.HandlerFunc {
 			case agents.GateRefine:
 				if len(gateResult.RefinedQueries) > 0 {
 					signal.SearchQueries = gateResult.RefinedQueries
-					if refined, err := retrieveBySignal(ctx, d, signal, candidatePoolSize); err == nil && len(refined) > 0 {
+					if refined, refineErr := retrieveBySignal(ctx, d, signal, candidatePoolSize); refineErr != nil || len(refined) == 0 {
+						log.Printf("gate REFINE retrieval failed (keeping original): %v", refineErr)
+					} else {
 						candidates = refined
 					}
 				}
 			}
 		}
 
-		// Stage 4 — Psychographic Reranking
+		// Stage 4 — Psychographic Reranking (cap pool at 20 to bound LLM output size)
+		rerankerPool := candidates
+		if len(rerankerPool) > 20 {
+			rerankerPool = rerankerPool[:20]
+		}
 		rankCtx, rankCancel := context.WithTimeout(ctx, agentTimeout)
-		ranked, err := agents.NewReranker(provider).Rank(rankCtx, signal, candidates, req.CrossDomain)
+		ranked, err := agents.NewReranker(provider).Rank(rankCtx, signal, rerankerPool, req.CrossDomain)
 		rankCancel()
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "reranking failed: "+err.Error())
@@ -170,7 +180,7 @@ func retrieveBySignal(ctx context.Context, d *Deps, signal *models.UserSignal, p
 		results = r
 	}
 
-	return deduplicateByText(results), nil
+	return deduplicateByEntity(deduplicateByText(results)), nil
 }
 
 // sampleCorpus embeds the last user turn and retrieves 5 representative items from the DB.
@@ -210,6 +220,61 @@ func deduplicateByText(results []rag.Result) []rag.Result {
 	for _, r := range results {
 		if !seen[r.SearchText] {
 			seen[r.SearchText] = true
+			deduped = append(deduped, r)
+		}
+	}
+	return deduped
+}
+
+// entityKey extracts a proper-noun fingerprint from text.
+// Returns the first sequence of ≥2 consecutive capitalised words (& / "and" treated as joiners).
+// Returns "" when no sequence is found; items with no key are never deduplicated by entity.
+func entityKey(text string) string {
+	words := strings.Fields(text)
+	var run []string
+	for _, w := range words {
+		clean := strings.TrimFunc(w, func(r rune) bool {
+			return r == '.' || r == ',' || r == '!' || r == '?' || r == '"' || r == '\'' || r == '(' || r == ')'
+		})
+		lc := strings.ToLower(clean)
+		if lc == "&" || lc == "and" {
+			if len(run) > 0 {
+				continue // allow mid-entity connector; don't append to run
+			}
+			continue
+		}
+		if len(clean) > 0 && clean[0] >= 'A' && clean[0] <= 'Z' {
+			run = append(run, lc)
+		} else {
+			if len(run) >= 2 {
+				break
+			}
+			run = run[:0] // not a sequence yet, reset
+		}
+	}
+	if len(run) < 2 {
+		return ""
+	}
+	return strings.Join(run, " ")
+}
+
+// deduplicateByEntity removes candidates that appear to be reviews of the same named entity.
+// Fingerprinting uses the first ≥2 consecutive capitalised words found in search_text.
+// Domain is included in the composite key so same-named entities across domains are kept.
+// Items with no detectable entity are never suppressed.
+// Results must already be sorted ascending by score so the best review survives.
+func deduplicateByEntity(results []rag.Result) []rag.Result {
+	seen := make(map[string]bool, len(results))
+	deduped := make([]rag.Result, 0, len(results))
+	for _, r := range results {
+		key := entityKey(r.SearchText)
+		if key == "" {
+			deduped = append(deduped, r)
+			continue
+		}
+		composite := r.Domain + ":" + key
+		if !seen[composite] {
+			seen[composite] = true
 			deduped = append(deduped, r)
 		}
 	}
