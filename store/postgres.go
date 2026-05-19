@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"ningen/domain"
 
-	pgvector "github.com/pgvector/pgvector-go"
-	pgvectorpgx "github.com/pgvector/pgvector-go/pgx"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	pgvector "github.com/pgvector/pgvector-go"
+	pgvectorpgx "github.com/pgvector/pgvector-go/pgx"
 )
 
 type Storage interface {

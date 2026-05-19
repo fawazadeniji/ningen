@@ -10,17 +10,23 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/joho/godotenv"
+
 	"ningen/embed"
 	"ningen/internal/handlers"
 	"ningen/internal/llm"
 	"ningen/internal/rag"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
 
 	if err := run(ctx); err != nil {
 		log.Fatalf("server error: %v", err)
@@ -59,6 +65,7 @@ func run(ctx context.Context) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /recommend", handlers.RecommendHandler(deps))
+	mux.HandleFunc("POST /generate-review", handlers.GenerateReviewHandler(deps))
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})

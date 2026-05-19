@@ -50,12 +50,12 @@ const (
 func main() {
 	ctx := context.Background()
 
-	dbURL      := envOr("DB_URL",           "postgres://postgres:postgres@localhost:5434/postgres?sslmode=disable")
-	embedURL   := envOr("EMBEDDER_URL",     "http://localhost:8001")
-	apiURL     := envOr("API_URL",          "http://localhost:8080")
-	provider   := envOr("PROVIDER",         "gemini")
-	nSeeds     := envInt("SEEDS_PER_DOMAIN", 20)
-	gtThresh   := envFloat("GT_THRESHOLD",  0.45)
+	dbURL := envOr("DB_URL", "postgres://postgres:postgres@localhost:5434/postgres?sslmode=disable")
+	embedURL := envOr("EMBEDDER_URL", "http://localhost:8001")
+	apiURL := envOr("API_URL", "http://localhost:8080")
+	provider := envOr("PROVIDER", "gemini")
+	nSeeds := envInt("SEEDS_PER_DOMAIN", 20)
+	gtThresh := envFloat("GT_THRESHOLD", 0.45)
 
 	log.Printf("holdout_eval  provider=%s  seeds/domain=%d  gt_threshold=%.2f", provider, nSeeds, gtThresh)
 
@@ -91,10 +91,10 @@ func main() {
 	var allResults []seedResult
 
 	type domainJob struct {
-		name   string
-		src    ingest.Source
-		skip   int
-		query  string
+		name    string
+		src     ingest.Source
+		skip    int
+		query   string
 		persona string
 	}
 
@@ -222,8 +222,8 @@ func evaluateDomain(
 			continue
 		}
 
-		n  := ndcgAtK(ranked, gt, topK)
-		h  := hitAtK(ranked, gt, topK)
+		n := ndcgAtK(ranked, gt, topK)
+		h := hitAtK(ranked, gt, topK)
 		rr := mrrScore(ranked, gt)
 		fmt.Printf("NDCG@%d=%.3f  Hit@%d=%d  MRR=%.3f\n", topK, n, topK, int(h), rr)
 
@@ -405,14 +405,14 @@ func printDomainReport(domain string, results []seedResult) {
 		return
 	}
 	ndcgs := make([]float64, len(results))
-	hits  := make([]float64, len(results))
-	mrrs  := make([]float64, len(results))
-	gts   := make([]float64, len(results))
+	hits := make([]float64, len(results))
+	mrrs := make([]float64, len(results))
+	gts := make([]float64, len(results))
 	for i, r := range results {
 		ndcgs[i] = r.ndcg
-		hits[i]  = r.hit
-		mrrs[i]  = r.mrr
-		gts[i]   = float64(r.gtSize)
+		hits[i] = r.hit
+		mrrs[i] = r.mrr
+		gts[i] = float64(r.gtSize)
 	}
 	fmt.Printf("\n%s\n%s report  (%d seeds evaluated)\n", sep, strings.ToUpper(domain), len(results))
 	fmt.Printf("  NDCG@%-2d : %.4f  (std %.4f)\n", topK, mean(ndcgs), stddev(ndcgs))
@@ -428,12 +428,12 @@ func printOverallReport(results []seedResult) {
 		return
 	}
 	ndcgs := make([]float64, len(results))
-	hits  := make([]float64, len(results))
-	mrrs  := make([]float64, len(results))
+	hits := make([]float64, len(results))
+	mrrs := make([]float64, len(results))
 	for i, r := range results {
 		ndcgs[i] = r.ndcg
-		hits[i]  = r.hit
-		mrrs[i]  = r.mrr
+		hits[i] = r.hit
+		mrrs[i] = r.mrr
 	}
 	fmt.Printf("%s\nOVERALL  (%d seeds across all domains)\n", sep, len(results))
 	fmt.Printf("  NDCG@%-2d : %.4f\n", topK, mean(ndcgs))

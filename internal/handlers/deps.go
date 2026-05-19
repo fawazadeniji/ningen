@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+
 	"ningen/embed"
 	"ningen/internal/llm"
 	"ningen/internal/models"
@@ -27,6 +28,14 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // writeError writes a standard error envelope.
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, models.ErrorResponse{Error: msg})
+}
+
+// writeDetailedError writes an error envelope with additional context details.
+func writeDetailedError(w http.ResponseWriter, status int, msg string, details map[string]interface{}) {
+	writeJSON(w, status, models.DetailedErrorResponse{
+		Error:   msg,
+		Details: details,
+	})
 }
 
 // decode unmarshals the request body into dst and returns false on error,

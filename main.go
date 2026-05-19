@@ -142,7 +142,7 @@ func run(ctx context.Context) error {
 					continue
 				}
 				item.Embedding = vec
-				
+
 				select {
 				case embeddedItems <- item:
 				case <-ctx.Done():

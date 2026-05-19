@@ -2,7 +2,7 @@ package models
 
 // ConversationTurn represents a single message in a multi-turn chat history.
 type ConversationTurn struct {
-	Role    string `json:"role"`    // "user" | "assistant"
+	Role    string `json:"role"` // "user" | "assistant"
 	Content string `json:"content"`
 }
 
@@ -38,4 +38,10 @@ type RecommendResponse struct {
 // ErrorResponse is the standard error envelope.
 type ErrorResponse struct {
 	Error string `json:"error"`
+}
+
+// DetailedErrorResponse provides structured error information with additional context.
+type DetailedErrorResponse struct {
+	Error   string         `json:"error"`
+	Details map[string]any `json:"details,omitempty"`
 }
