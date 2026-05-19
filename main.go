@@ -83,11 +83,11 @@ func run(ctx context.Context) error {
 	}
 
 	// Per-source limits ensure cross-domain diversity regardless of target size.
-	// Ratios: 40% yelp, 40% amazon, 20% goodreads.
+	// Ratios: 50% yelp (food/restaurants), 25% amazon electronics (products), 25% amazon books.
 	sources := []limitedSource{
-		{ingest.NewYelpJsonl("https://huggingface.co/datasets/SetFit/yelp_review_full/resolve/main/train.jsonl"), targetItemCount * 40 / 100},
-		{ingest.NewAmazonGzJsonl("https://snap.stanford.edu/data/amazon/productGraph/categoryFiles/reviews_Electronics.json.gz"), targetItemCount * 40 / 100},
-		{ingest.NewGoodreadsCSV("https://huggingface.co/datasets/Pauleera/Goodreads-Book-Reviews/resolve/main/reviews_reduced.csv"), targetItemCount * 20 / 100},
+		{ingest.NewYelpJsonl("https://huggingface.co/datasets/SetFit/yelp_review_full/resolve/main/train.jsonl"), targetItemCount * 50 / 100},
+		{ingest.NewAmazonGzJsonl("https://snap.stanford.edu/data/amazon/productGraph/categoryFiles/reviews_Electronics.json.gz"), targetItemCount * 25 / 100},
+		{ingest.NewAmazonGzJsonl("https://snap.stanford.edu/data/amazon/productGraph/categoryFiles/reviews_Books.json.gz"), targetItemCount * 25 / 100},
 	}
 
 	rawItems := make(chan domain.Item, 1000)
@@ -153,21 +153,19 @@ func run(ctx context.Context) error {
 	}
 
 	// 3. Reader Routine (Sequential across sources)
+	// Skip logic removed: deterministic IDs + ON CONFLICT DO NOTHING handle dedup.
+	// Limits are pre-checked before sending so the channel buffer never causes overshoot.
 	go func() {
 		defer close(rawItems)
 		itemsCollected := 0
-		itemsSkipped := 0
 
 		for _, ls := range sources {
-			if itemsCollected+count >= targetItemCount {
-				break
-			}
-
 			log.Printf("Streaming from source: %T (limit: %d)", ls.src, ls.limit)
+			sourceCtx, sourceCancel := context.WithCancel(ctx)
 			sourceChan := make(chan domain.Item, 100)
 			sourceErrChan := make(chan error, 1)
 			go func() {
-				sourceErrChan <- ls.src.Stream(ctx, sourceChan)
+				sourceErrChan <- ls.src.Stream(sourceCtx, sourceChan)
 				close(sourceChan)
 			}()
 
@@ -176,6 +174,7 @@ func run(ctx context.Context) error {
 			for {
 				select {
 				case <-ctx.Done():
+					sourceCancel()
 					return
 				case err := <-sourceErrChan:
 					if err != nil {
@@ -187,13 +186,11 @@ func run(ctx context.Context) error {
 						break streamLoop
 					}
 
-					// Resume logic: skip items already ingested in previous runs
-					if itemsSkipped < count {
-						itemsSkipped++
-						if itemsSkipped%10000 == 0 {
-							log.Printf("Skipped %d existing items...", itemsSkipped)
-						}
-						continue
+					// Pre-check limits before sending — avoids channel-buffer overshoot.
+					if ls.limit > 0 && sourceCollected >= ls.limit {
+						log.Printf("Source %T hit per-source limit (%d). Moving to next source.", ls.src, ls.limit)
+						sourceCancel()
+						break streamLoop
 					}
 
 					select {
@@ -203,19 +200,13 @@ func run(ctx context.Context) error {
 						if itemsCollected%1000 == 0 {
 							log.Printf("Read %d new items so far", itemsCollected)
 						}
-						if itemsCollected+count >= targetItemCount {
-							log.Printf("Reached target item count (%d). Stopping reader.", targetItemCount)
-							return
-						}
-						if ls.limit > 0 && sourceCollected >= ls.limit {
-							log.Printf("Source %T hit per-source limit (%d). Moving to next source.", ls.src, ls.limit)
-							break streamLoop
-						}
 					case <-ctx.Done():
+						sourceCancel()
 						return
 					}
 				}
 			}
+			sourceCancel()
 		}
 	}()
 

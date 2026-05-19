@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"ningen/domain"
-
-	"github.com/google/uuid"
 )
 
 // YelpJsonl streams the SetFit/yelp_review_full JSONL format.
@@ -60,11 +58,15 @@ func (s *YelpJsonl) Stream(ctx context.Context, out chan<- domain.Item) error {
 		}
 
 		meta, _ := json.Marshal(map[string]json.RawMessage{"label": record.Label})
-		out <- domain.Item{
-			ID:         uuid.NewString(),
+		select {
+		case out <- domain.Item{
+			ID:         deterministicID("yelp", record.Text),
 			Domain:     "yelp",
 			Metadata:   string(meta),
 			SearchText: record.Text,
+		}:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 

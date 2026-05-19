@@ -8,8 +8,6 @@ import (
 	"io"
 	"net/http"
 	"ningen/domain"
-
-	"github.com/google/uuid"
 )
 
 type GoodreadsCSV struct {
@@ -72,11 +70,15 @@ func (s *GoodreadsCSV) Stream(ctx context.Context, out chan<- domain.Item) error
 		}
 
 		meta, _ := json.Marshal(map[string]string{"rating": rating})
-		out <- domain.Item{
-			ID:         uuid.NewString(),
+		select {
+		case out <- domain.Item{
+			ID:         deterministicID("goodreads", text),
 			Domain:     "goodreads",
 			Metadata:   string(meta),
 			SearchText: text,
+		}:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 }

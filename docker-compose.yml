@@ -22,7 +22,7 @@ services:
     build:
       context: ./embedder_service
     ports:
-      - "8001:8000"
+      - "127.0.0.1:8001:8000"
     environment:
       - MODEL_DIR=/models
     healthcheck:

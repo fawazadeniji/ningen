@@ -36,35 +36,54 @@ All outputs are post-processed through a Nigerian cultural humanizer so response
 └──────────────────────────────────────────────────────────┘
 ```
 
-**Request flow for Task B (`POST /recommend`):**
+**SIGNAL pipeline — request flow for `POST /recommend`:**
 
 ```
 Client
   │
   ▼
 Cold-start gate
-  │  no history → humanized clarifying question
+  │  empty history → humanized clarifying question
   │
   ▼
-Embed last user turn (ONNX sidecar)
+Stage 0 — Corpus pre-search
+  │  embed last user turn → top-5 DB samples (grounds LLM in what actually exists)
   │
   ▼
-pgvector HNSW cosine search (pool of 50)
-  │  fallback → full-text ILIKE search
+Stage 1 — Signal Extractor (LLM)
+  │  persona + history + corpus examples → UserSignal
+  │  {intent, domain, search_queries, mood, constraints}
+  │  clarify_needed=true → humanized follow-up question
   │
   ▼
-LLM synthesis (Kimi / Gemini / OpenAI)
+Stage 2 — Multi-vector Retrieval
+  │  embed each search_query → pgvector HNSW cosine search (pool of 50)
+  │  union results, deduplicate by item_id and search_text
+  │  fallback → full-text search on intent phrase
   │
   ▼
-Nigerian Humanizer pass
+Stage 3 — Quality Gate (LLM)
+  │  ACCEPT → continue
+  │  REFINE → rewrite queries, re-retrieve
+  │  ASK    → humanized clarifying question to client
   │
   ▼
-JSON response (top-N items + reasoning)
+Stage 4 — Psychographic Reranker (LLM)
+  │  top-20 candidates ranked by mood + constraints + domain fit
+  │
+  ▼
+Nigerian Humanizer pass (overall reasoning)
+  │
+  ▼
+JSON response (top-N items + per-item reasoning + narrative)
 ```
+
+Each LLM stage runs with a 25-second context timeout. The pipeline is fault-tolerant: Gate parse failures default to ACCEPT, Reranker parse failures fall back to retrieval order.
 
 ---
 
 ## Services
+
 
 | Service      | Description                                                                                    |
 | ------------ | ---------------------------------------------------------------------------------------------- |
@@ -72,6 +91,7 @@ JSON response (top-N items + reasoning)
 | `embedder`   | Python FastAPI sidecar running `all-MiniLM-L6-v2` via ONNX Runtime (CPU-only, no Torch)        |
 | `etl_worker` | One-shot Go binary — streams 100k reviews, embeds, bulk-inserts, builds HNSW index, then exits |
 | `api`        | Long-running Go HTTP server exposing the recommendation API                                    |
+
 
 The embedder uses ONNX Runtime instead of Ollama — no extra 4 GB pull, cold starts in seconds, and model weights are cached in a Docker volume after first run.
 
@@ -101,10 +121,10 @@ That single command:
 
 1. Starts Postgres and waits for it to be healthy.
 2. Starts the embedder sidecar and downloads the ONNX model on first run (~90 MB, cached to a volume).
-3. Runs the ETL worker — streams 100k reviews from Yelp, Amazon, and Goodreads, embeds each one, bulk-inserts into Postgres, and builds the HNSW index. **This takes 20–40 minutes on first run** depending on network speed.
+3. Runs the ETL worker — streams 100k reviews from Yelp, Amazon, and Goodreads, embeds each one, bulk-inserts into Postgres with dedup, and builds the HNSW index. **This takes 20–40 minutes on first run** depending on network speed.
 4. Starts the API server on port 8080.
 
-The ETL worker is idempotent. If you restart the stack after a full ingest, it detects `COUNT(*) >= 100000` and skips straight to booting the API.
+The ETL worker is idempotent. If you restart the stack after a full ingest, it detects `COUNT(*) >= 100000` and skips straight to booting the API. Partial runs can be resumed — existing rows are skipped via deterministic IDs and `ON CONFLICT DO NOTHING`.
 
 ### 3. Verify
 
@@ -152,14 +172,15 @@ Conversational recommendation. Pass a user persona and chat history; receive ran
       "item_id": "uuid",
       "domain": "goodreads",
       "search_text": "Review text excerpt...",
-      "score": 0.312
+      "score": 0.312,
+      "reasoning": "This fits your mood for introspective fiction on a long journey."
     }
   ],
   "reasoning": "Omo, for that long flight you won't regret picking up..."
 }
 ```
 
-**Cold-start response** (empty `history`):
+**Clarifying question response** (empty `history` or ambiguous signal):
 
 ```json
 {
@@ -168,7 +189,7 @@ Conversational recommendation. Pass a user persona and chat history; receive ran
 }
 ```
 
-`score` is cosine distance — lower means more similar. Items are ordered by score ascending (most relevant first).
+`score` is cosine distance — lower means more similar. Items are ordered by psychographic rank (not raw score).
 
 ### `GET /health`
 
@@ -195,45 +216,63 @@ Copy `.env.example` to `.env`. At least one LLM key is required or the API serve
 | `EMBEDDER_URL`             | Embedder sidecar URL (auto-set in docker-compose)            |
 | `PORT`                     | API server port (default: `8080`)                            |
 
+
 ---
 
 ## Project Structure
 
 ```
 ningen/
-├── cmd/api/main.go          # API server entry point
-├── main.go                  # ETL pipeline entry point
+├── cmd/
+│   ├── api/main.go              # API server entry point
+│   └── holdout_eval/
+│       ├── main.go              # Offline evaluation: NDCG@10, Hit@10, MRR
+│       └── metrics_test.go      # Unit tests for ranking metrics
+├── main.go                      # ETL pipeline entry point
 │
 ├── domain/
-│   └── item.go              # Shared Item type
+│   └── item.go                  # Shared Item type
 │
 ├── ingest/
-│   ├── source.go            # Source interface
-│   ├── amazon.go            # Amazon gzipped JSONL streamer
-│   ├── goodreads.go         # Goodreads CSV streamer
-│   └── yelp.go              # Yelp CSV streamer (unused — URL defunct)
+│   ├── source.go                # Source interface
+│   ├── id.go                    # Deterministic UUID v5 for dedup-safe IDs
+│   ├── amazon.go                # Amazon gzipped JSONL streamer
+│   ├── goodreads.go             # Goodreads CSV streamer
+│   └── yelp.go                  # Yelp JSONL streamer
 │
 ├── embed/
-│   └── embedder.go          # HTTP client for the ONNX sidecar
+│   └── embedder.go              # HTTP client for the ONNX sidecar
 │
 ├── store/
-│   └── postgres.go          # ETL-side DB: init, bulk insert, HNSW index
+│   └── postgres.go              # ETL-side DB: init, bulk insert (ON CONFLICT DO NOTHING), HNSW index
 │
 ├── internal/
+│   ├── agents/
+│   │   ├── extractor.go         # Stage 1: LLM signal extraction
+│   │   ├── gate.go              # Stage 3: LLM quality gate (ACCEPT/REFINE/ASK)
+│   │   ├── reranker.go          # Stage 4: LLM psychographic reranker
+│   │   └── agents_test.go       # Unit tests (fully mocked, no network calls)
 │   ├── handlers/
-│   │   ├── deps.go          # Shared Deps struct + HTTP helpers
-│   │   └── task_b.go        # POST /recommend handler
+│   │   ├── deps.go              # Shared Deps struct + HTTP helpers
+│   │   ├── recommend.go         # POST /recommend — full SIGNAL pipeline
+│   │   └── recommend_test.go    # Unit tests for dedup and result ordering
 │   ├── llm/
-│   │   ├── provider.go      # LLMProvider interface + humanizer system prompt
-│   │   ├── openai.go        # Generic OpenAI-compatible client (Kimi/Gemini/Azure/OpenAI)
-│   │   └── registry.go      # Build() — reads env, initialises available providers
+│   │   ├── provider.go          # LLMProvider interface + humanizer system prompt
+│   │   ├── openai.go            # Generic OpenAI-compatible client (Kimi/Gemini/Azure/OpenAI)
+│   │   └── registry.go          # Build() — reads env, initialises available providers
 │   ├── models/
-│   │   └── schemas.go       # Request/response types
+│   │   ├── schemas.go           # Request/response types
+│   │   └── signal.go            # UserSignal — shared contract across all pipeline stages
 │   └── rag/
-│       └── vector_store.go  # pgvector HNSW search + full-text fallback
+│       └── vector_store.go      # pgvector HNSW search, multi-vector union, full-text fallback
+│
+├── scripts/
+│   ├── dev.sh                   # Local dev: sources .env, overrides DB/embedder to localhost, runs air
+│   ├── eval.sh                  # Smoke-test harness: cold-start, single-turn, multi-turn, all providers
+│   └── spot_eval.sh             # 2-scenario deep inspection: full JSON + reasoning visible
 │
 └── embedder_service/
-    ├── main.py              # FastAPI ONNX embedder service
+    ├── main.py                  # FastAPI ONNX embedder service
     ├── requirements.txt
     └── Dockerfile
 ```
@@ -250,11 +289,25 @@ The pipeline runs once and exits. Data is streamed directly from source URLs —
 2. Amazon Books — gzipped JSONL (~8M reviews, overflow if Electronics runs short)
 3. Goodreads Book Reviews — CSV (cross-domain diversity)
 
-**Architecture:** 10 embedding worker goroutines running in parallel, feeding a single writer goroutine that batches 5,000 items per `COPY FROM` call.
+**Dedup:** Item IDs are UUID v5 derived from `domain + review_text`. Reingest of the same content produces the same ID and is silently skipped via `ON CONFLICT (item_id) DO NOTHING`.
 
-**Target:** Configurable via `TARGET_ITEM_COUNT` env var (default: `100000`). Set to `25000` for a quick evaluation run (~8 min). The HNSW index (`vector_cosine_ops`) is created after all inserts to avoid write amplification during bulk load.
+**Target:** Configurable via `TARGET_ITEM_COUNT` (default: `100000`). Set to `25000` for a quick evaluation run (~8 min). The HNSW index (`vector_cosine_ops`) is created after all inserts to avoid write amplification during bulk load.
 
-**Resume behavior:** On restart, the pipeline counts existing DB rows and skips that many items from the beginning of the source stream before continuing. Safe to interrupt and resume.
+**Resume:** On restart the pipeline counts existing rows and skips that many items from the beginning of the source stream. Safe to interrupt and resume.
+
+---
+
+## Offline Evaluation
+
+```bash
+# Scored metrics against holdout sets from the source datasets
+SEEDS_PER_DOMAIN=20 go run ./cmd/holdout_eval
+
+# 2-scenario deep inspection with full LLM output visible
+./scripts/spot_eval.sh
+```
+
+The holdout evaluator streams items from the end of each source dataset (never ingested), embeds them, finds ground-truth DB neighbors by cosine distance, queries the API, and reports NDCG@10, Hit@10, and MRR per domain. It handles `requires_input` responses by synthesizing a follow-up from the seed text.
 
 ---
 
@@ -471,8 +524,12 @@ All nodes support model overrides. See [internal/pipeline/nodes/model_overrides_
 
 **ONNX over Ollama.** Ollama requires a 4 GB+ image pull and a GPU-optimized runtime. The ONNX sidecar pulls ~90 MB of weights, runs on CPU with ONNX Runtime, and starts in under 10 seconds. Model weights are volume-cached after first download.
 
-**50-candidate pool.** Retrieval always fetches 50 candidates from pgvector. The LLM synthesises over all 50 for better ranking; the response payload trims to `limit` (default 10). This directly improves NDCG@10 without increasing response size.
+**2-pass extraction.** Before the LLM generates search queries, we embed the last user turn and retrieve 5 representative corpus samples. These are fed to the Extractor as examples, grounding its queries in what actually exists in the DB. Prevents queries for items the corpus doesn't contain.
+
+**50-candidate pool, 20-candidate reranker.** Retrieval fetches 50 candidates from pgvector (2× per-query fetch for better diversity across multi-vector union). The Gate sees the top 10 for quality evaluation. The Reranker sees the top 20 — enough for accurate psychographic ranking while bounding LLM output size and latency. The response trims to `limit` (default 10).
 
 **Cold-start as an explicit state.** When `history` is empty the system has no intent signal and returning random items would score poorly. Instead it returns `requires_input: true` with a humanized clarifying question, making the multi-turn nature of the system explicit to the evaluator.
 
 **Multi-LLM registry.** Providers are registered at startup based on which env vars are present. Switching providers requires only changing the `provider` field in the request — no code changes. Useful for ablation in the solution paper.
+
+**Deterministic item IDs.** UUIDs are derived via SHA-1 from `domain + review_text`. The same review always gets the same ID across runs, enabling `ON CONFLICT DO NOTHING` dedup without a separate uniqueness check.
