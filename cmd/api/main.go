@@ -63,10 +63,12 @@ func run(ctx context.Context) error {
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	mux.HandleFunc("GET /docs", handlers.DocsHandler())
+	mux.HandleFunc("GET /openapi.yaml", handlers.OpenAPIHandler())
 
 	srv := &http.Server{
 		Addr:         ":" + port,
-		Handler:      requestLogger(mux),
+		Handler:      requestLogger(cors(mux)),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 120 * time.Second,
 		IdleTimeout:  120 * time.Second,
@@ -98,6 +100,28 @@ type statusRecorder struct {
 func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
+}
+
+func cors(next http.Handler) http.Handler {
+	allowed := map[string]bool{
+		"https://ningen.vercel.app": true,
+		"http://localhost:3000":     true,
+		"http://localhost:8080":     true,
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if allowed[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		}
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func requestLogger(next http.Handler) http.Handler {

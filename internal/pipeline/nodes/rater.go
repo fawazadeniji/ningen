@@ -59,11 +59,11 @@ func Rater(model llm.LLMProvider) func(context.Context, AgentState) (AgentState,
 	}
 }
 
-// buildRaterPrompt constructs the prompt for predicting a star rating using Chain-of-Thought.
+// buildRaterPrompt constructs the prompt for predicting a star rating.
 func buildRaterPrompt(profile *UserProfile, product *TargetProduct) []llm.Message {
 	systemInstruction := `You are a strict behavioral data scientist. Your goal is to predict EXACTLY what rating (1.0 to 5.0) a specific user will give a new product. You must avoid generic AI rating bias. You must anchor your prediction on the user's historical mathematical averages.`
 
-	userPrompt := fmt.Sprintf(`Predict the star rating for this user. 
+	userPrompt := fmt.Sprintf(`Predict the star rating for this user.
 
 <USER_MATHEMATICAL_BASELINE>
 - Historical Average Rating: %.2f stars
@@ -84,14 +84,13 @@ func buildRaterPrompt(profile *UserProfile, product *TargetProduct) []llm.Messag
 </TARGET_PRODUCT>
 
 <PREDICTION_LOGIC>
-You MUST follow this Chain-of-Thought in your rationale:
-1. Start at the user's Historical Average Rating.
-2. Evaluate if the Target Product hits their "Behavioral Markers" or "Cultural Hooks" (e.g., if they hate slow delivery and the product mentions slow delivery, penalize the score).
-3. Evaluate Category Fit (Is it in their preferred categories?).
-4. Adjust the baseline up or down based on these factors to reach the final Predicted Rating.
+Anchor on the user's Historical Average Rating, then adjust:
+1. Does the product align with their Behavioral Markers or Cultural Hooks? If they hate slow delivery and it's mentioned, penalize.
+2. Is it in their preferred categories?
+3. Adjust the baseline up or down to reach the final Predicted Rating.
 </PREDICTION_LOGIC>
 
-Respond strictly with the provided JSON schema. Ensure your "rationale" is 3-4 bullet points outlining the adjustments from their baseline.`,
+Respond strictly with the provided JSON schema. Your "rationale" field must be a user-safe rationale — 3-4 bullet points a real user could read, explaining why this rating was predicted.`,
 		profile.AverageRating,
 		profile.RatingPatterns.RatingThresholds.Low,
 		profile.RatingPatterns.RatingThresholds.High,

@@ -14,6 +14,10 @@ type RecommendRequest struct {
 	Limit       int                `json:"limit"`
 	// Provider selects the LLM backend: "kimi" | "gemini" | "openai"
 	Provider string `json:"provider"`
+	// NigerianFlavor controls whether the humanizer uses Nigerian cultural voice.
+	// Defaults to true. Set to false to receive warm, neutral English instead.
+	// Humanization always runs — this only switches the cultural register.
+	NigerianFlavor *bool `json:"nigerian_flavor,omitempty"`
 }
 
 // RecommendedItem is a single item returned by the recommendation engine.

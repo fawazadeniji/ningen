@@ -1,0 +1,413 @@
+openapi: 3.1.0
+info:
+  title: Ningen API
+  description: |
+    Conversational recommendation and review generation system built on real-world
+    review data (Yelp, Amazon, Goodreads).
+
+    **Task B** — `POST /recommend`: context-aware recommendation with cold-start
+    handling, cross-domain retrieval, and multi-turn dialogue.
+
+    **Task A** — `POST /generate-review`: simulates a user's star rating and written
+    review for an unseen item based on their review history.
+
+    All Task B outputs optionally pass through a Nigerian cultural humanizer
+    (enabled by default, toggle via `humanize: false`).
+  version: 1.0.0
+  contact:
+    name: Team Ningen
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      description: Returns 200 OK when the API server is ready. Used by Docker health checks.
+      operationId: healthCheck
+      responses:
+        "200":
+          description: Server is healthy
+
+  /recommend:
+    post:
+      summary: Task B — Conversational recommendation
+      description: |
+        Runs the four-stage SIGNAL pipeline against the vector corpus:
+
+        1. **Signal Extractor** — LLM distils persona + history into a structured intent signal.
+        2. **Multi-vector Retrieval** — each search query is embedded and searched; results unioned.
+        3. **Quality Gate** — LLM validates retrieval quality; can REFINE queries or ASK for more input.
+        4. **Psychographic Reranker** — LLM ranks candidates by mood, constraints, and domain fit.
+
+        When `history` is empty or the signal is too ambiguous, the API returns
+        `requires_input: true` with a clarifying question instead of recommendations.
+      operationId: recommend
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecommendRequest"
+            examples:
+              books:
+                summary: Book recommendation
+                value:
+                  user_persona: "A 32-year-old Lagos-based software engineer who loves literary fiction and African authors."
+                  history:
+                    - role: user
+                      content: "I just finished Americanah and need something new. Not too heavy, strong female protagonist."
+                  limit: 5
+                  provider: gemini
+              cross_domain:
+                summary: Cross-domain request
+                value:
+                  user_persona: "A Nigerian expat in London who misses home food and loves thrillers."
+                  history:
+                    - role: user
+                      content: "Recommend me something for the weekend — could be food or a book."
+                  cross_domain: true
+                  limit: 5
+                  provider: gemini
+              neutral_flavor:
+                summary: Neutral English (Nigerian flavor off)
+                value:
+                  user_persona: "A tech professional who prefers neutral recommendations."
+                  history:
+                    - role: user
+                      content: "Recommend a good electronics product for productivity."
+                  nigerian_flavor: false
+                  limit: 5
+                  provider: gemini
+      responses:
+        "200":
+          description: Recommendations or clarifying question
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendResponse"
+              examples:
+                recommendations:
+                  summary: Normal recommendation response
+                  value:
+                    recommendations:
+                      - item_id: "3f7a9c2e-4b81-4d6f-9e32-a1b5c8d70f4e"
+                        domain: amazon
+                        search_text: "Great noise-cancelling headphones, perfect for long flights and focus work..."
+                        score: 0.182
+                        reasoning: "Aligns with your productivity focus and commute lifestyle."
+                    reasoning: "Omo, based on what you described, these picks go hard for your setup..."
+                clarifying_question:
+                  summary: Clarification needed
+                  value:
+                    requires_input: true
+                    question: "Abeg, tell me more — are you looking for something to read, eat, or buy?"
+        "400":
+          description: Bad request (missing persona, unknown provider)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Pipeline stage failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /generate-review:
+    post:
+      summary: Task A — Simulate user review and rating
+      description: |
+        Runs the Task A review-generation pipeline:
+
+        1. **Profiler** — builds a behavioural profile from the user's review history.
+        2. **Rater** — predicts the star rating (1.0–5.0) anchored to the user's historical average.
+        3. **Drafter** — generates a written review matching the user's tone and style.
+        4. **Critic loop** — evaluates and rewrites the draft until it passes quality checks (max 2 iterations).
+
+        The generated review is localized to Nigerian context (Jumia instead of Amazon,
+        Nigerian Naira, etc.) automatically.
+      operationId: generateReview
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerateReviewRequest"
+            examples:
+              electronics:
+                summary: Electronics review simulation
+                value:
+                  user_history:
+                    - item_name: "Logitech MX Master 3"
+                      item_category: "Electronics"
+                      rating: 5.0
+                      review_text: "Absolute beast of a mouse. The scroll wheel alone is worth the price."
+                    - item_name: "Anker USB-C Hub"
+                      item_category: "Electronics"
+                      rating: 2.0
+                      review_text: "Stopped working after 3 months. Quality has really dropped."
+                  target_product:
+                    name: "Razer DeathAdder V3"
+                    category: "Electronics"
+                    description: "Ergonomic wired gaming mouse, 59g, optical sensor"
+                    source: "amazon"
+                  provider: gemini
+      responses:
+        "200":
+          description: Generated review and predicted rating
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewGenerationResponse"
+              examples:
+                result:
+                  summary: Successful review generation
+                  value:
+                    generated_review: "I sha wasn't expecting much from Razer but this mouse surprised me..."
+                    predicted_rating: 4.2
+                    critic_verdict: "PASS"
+                    iterations_used: 1
+                    execution_timing:
+                      profiler_ms: 1820
+                      rater_ms: 1340
+                      drafter_ms: 2100
+                      critic_ms: 1650
+        "400":
+          description: Validation error (missing history, invalid product)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetailedErrorResponse"
+        "500":
+          description: Pipeline stage failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetailedErrorResponse"
+
+components:
+  schemas:
+    ConversationTurn:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [user, assistant]
+          description: Who sent this message.
+        content:
+          type: string
+          description: The message text.
+
+    RecommendRequest:
+      type: object
+      required: [user_persona]
+      properties:
+        user_persona:
+          type: string
+          description: Free-text description of the user — background, preferences, location, mood.
+          example: "A busy Abuja professional in her late 20s who loves thrillers and good jollof rice."
+        history:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConversationTurn"
+          default: []
+          description: |
+            Alternating user/assistant turns representing the conversation so far.
+            Empty array triggers a cold-start clarifying question.
+        cross_domain:
+          type: boolean
+          default: false
+          description: When true, the LLM freely mixes categories (books, products, restaurants).
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 10
+          description: Maximum number of items to return.
+        provider:
+          type: string
+          enum: [kimi, gemini, openai]
+          description: LLM backend to use. Falls back to any available provider if omitted.
+        nigerian_flavor:
+          type: boolean
+          default: true
+          description: |
+            Controls the cultural register of humanized responses.
+            Humanization always runs. When true (default), output is rewritten
+            in natural Nigerian English — warm, culturally grounded, with local
+            references. When false, output is rewritten in neutral warm English
+            without Nigerian-specific elements.
+
+    RecommendedItem:
+      type: object
+      properties:
+        item_id:
+          type: string
+          format: uuid
+          description: Deterministic UUID v5 derived from domain + review text.
+        domain:
+          type: string
+          enum: [yelp, amazon, goodreads]
+          description: Source dataset the item came from.
+        search_text:
+          type: string
+          description: The review text excerpt used for embedding and display.
+        score:
+          type: number
+          format: float
+          description: Cosine distance from the query embedding — lower is more similar.
+        reasoning:
+          type: string
+          description: Per-item psychographic fit explanation from the reranker.
+
+    RecommendResponse:
+      type: object
+      properties:
+        recommendations:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecommendedItem"
+          description: Ranked list of recommended items. Present when requires_input is false.
+        reasoning:
+          type: string
+          description: Narrative explanation of the recommendation strategy.
+        requires_input:
+          type: boolean
+          description: True when the engine needs more context before recommending.
+        question:
+          type: string
+          description: Humanized clarifying question for the user. Present when requires_input is true.
+
+    ReviewHistoryEntry:
+      type: object
+      required: [item_name, item_category, rating, review_text]
+      properties:
+        item_name:
+          type: string
+          description: Name of the item the user reviewed.
+        item_category:
+          type: string
+          description: Product category (e.g. Electronics, Books, Food).
+        rating:
+          type: number
+          format: float
+          minimum: 1.0
+          maximum: 5.0
+          description: Star rating the user gave (1.0–5.0).
+        review_text:
+          type: string
+          description: The full review text the user wrote.
+
+    ReviewTargetProduct:
+      type: object
+      required: [name, category]
+      properties:
+        name:
+          type: string
+          description: Product name.
+        category:
+          type: string
+          description: Product category.
+        description:
+          type: string
+          description: Product description or specifications.
+        source:
+          type: string
+          description: Marketplace source (e.g. amazon, jumia). Localized automatically.
+        currency:
+          type: string
+          description: Currency code (e.g. NGN, USD). Localized to NGN automatically.
+        price:
+          type: number
+          description: Product price in the given currency.
+
+    GenerateReviewRequest:
+      type: object
+      required: [user_history, target_product]
+      properties:
+        user_history:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ReviewHistoryEntry"
+          description: The user's past reviews. Used to build their behavioural profile.
+        target_product:
+          $ref: "#/components/schemas/ReviewTargetProduct"
+          description: The item to simulate a review for.
+        provider:
+          type: string
+          enum: [kimi, gemini, openai]
+          description: LLM backend. Defaults to openai if omitted.
+        model_overrides:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Per-node model overrides. Keys are node names: profiler, rater, drafter, critic.
+            Values are model identifiers (e.g. "gemini-1.5-pro").
+          example:
+            drafter: "gemini-1.5-pro"
+            critic: "gemini-1.5-flash"
+
+    ExecutionTiming:
+      type: object
+      properties:
+        profiler_ms:
+          type: integer
+          description: Profiler node latency in milliseconds.
+        rater_ms:
+          type: integer
+          description: Rater node latency in milliseconds.
+        drafter_ms:
+          type: integer
+          description: Drafter node latency in milliseconds (last iteration).
+        critic_ms:
+          type: integer
+          description: Critic node latency in milliseconds (last iteration).
+
+    ReviewGenerationResponse:
+      type: object
+      properties:
+        generated_review:
+          type: string
+          description: The simulated review text in the user's voice.
+        predicted_rating:
+          type: number
+          format: float
+          minimum: 1.0
+          maximum: 5.0
+          description: Predicted star rating anchored to the user's historical average.
+        critic_verdict:
+          type: string
+          enum: [PASS, MAX_ITERATIONS]
+          description: |
+            PASS — the critic approved the review within the iteration limit.
+            MAX_ITERATIONS — the loop hit the 2-iteration cap; best draft returned.
+        iterations_used:
+          type: integer
+          description: Number of Drafter→Critic iterations executed.
+        execution_timing:
+          $ref: "#/components/schemas/ExecutionTiming"
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Human-readable error message.
+
+    DetailedErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Human-readable error message.
+        details:
+          type: object
+          additionalProperties: true
+          description: Structured context — e.g. failed_node, available_providers.

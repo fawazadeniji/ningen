@@ -2,15 +2,40 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"ningen/internal/agents"
+	"ningen/internal/llm"
 	"ningen/internal/models"
 	"ningen/internal/rag"
 )
+
+const neutralHumanizerPrompt = `You are a warm, professional advisor. Rewrite the provided text to be clear, friendly, and conversational — like a knowledgeable human speaking directly to the user. Keep every fact and recommendation intact. Output only the rewritten text, nothing else.`
+
+// humanizeText rewrites text through the humanizer.
+// When nigerian=true it uses the full Nigerian cultural voice (provider.Humanize).
+// When nigerian=false it uses a neutral warm register via a direct Complete call.
+// Falls back to the original text on any error.
+func humanizeText(ctx context.Context, provider llm.LLMProvider, text, userContext string, nigerian bool) string {
+	if nigerian {
+		if h, err := provider.Humanize(ctx, text, userContext); err == nil {
+			return h
+		}
+		return text
+	}
+	msgs := []llm.Message{
+		{Role: "system", Content: neutralHumanizerPrompt},
+		{Role: "user", Content: fmt.Sprintf("User context: %s\n\nText:\n%s", userContext, text)},
+	}
+	if h, err := provider.Complete(ctx, msgs); err == nil {
+		return h
+	}
+	return text
+}
 
 const (
 	defaultRecommendLimit = 10
@@ -46,12 +71,13 @@ func RecommendHandler(d *Deps) http.HandlerFunc {
 
 		ctx := r.Context()
 
+		nigerian := req.NigerianFlavor == nil || *req.NigerianFlavor
+
 		// Cold-start gate: no history means no intent signal at all.
 		if len(req.History) == 0 {
-			question := "What kind of item are you looking for — a book, a product, or a place to eat? Tell me a little about what you need or what mood you're in."
-			if h, err := provider.Humanize(ctx, question, req.UserPersona); err == nil {
-				question = h
-			}
+			question := humanizeText(ctx, provider,
+				"What kind of item are you looking for — a book, a product, or a place to eat? Tell me a little about what you need or what mood you're in.",
+				req.UserPersona, nigerian)
 			writeJSON(w, http.StatusOK, models.RecommendResponse{RequiresInput: true, Question: question})
 			return
 		}
@@ -80,13 +106,11 @@ func RecommendHandler(d *Deps) http.HandlerFunc {
 		}
 
 		if signal.ClarifyNeeded {
-			question := strings.TrimSpace(signal.ClarifyReason)
-			if question == "" {
-				question = fallbackClarifyQ
+			raw := strings.TrimSpace(signal.ClarifyReason)
+			if raw == "" {
+				raw = fallbackClarifyQ
 			}
-			if h, err := provider.Humanize(ctx, question, req.UserPersona); err == nil {
-				question = h
-			}
+			question := humanizeText(ctx, provider, raw, req.UserPersona, nigerian)
 			writeJSON(w, http.StatusOK, models.RecommendResponse{RequiresInput: true, Question: question})
 			return
 		}
@@ -105,13 +129,11 @@ func RecommendHandler(d *Deps) http.HandlerFunc {
 		if err == nil {
 			switch gateResult.Decision {
 			case agents.GateAsk:
-				question := gateResult.Question
-				if question == "" {
-					question = fallbackClarifyQ
+				raw := gateResult.Question
+				if raw == "" {
+					raw = fallbackClarifyQ
 				}
-				if h, err := provider.Humanize(ctx, question, req.UserPersona); err == nil {
-					question = h
-				}
+				question := humanizeText(ctx, provider, raw, req.UserPersona, nigerian)
 				writeJSON(w, http.StatusOK, models.RecommendResponse{RequiresInput: true, Question: question})
 				return
 			case agents.GateRefine:
@@ -139,10 +161,7 @@ func RecommendHandler(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		reasoning := ranked.OverallReasoning
-		if h, err := provider.Humanize(ctx, reasoning, req.UserPersona); err == nil {
-			reasoning = h
-		}
+		reasoning := humanizeText(ctx, provider, ranked.OverallReasoning, req.UserPersona, nigerian)
 
 		writeJSON(w, http.StatusOK, models.RecommendResponse{
 			Recommendations: buildOrderedItems(ranked, candidates, limit),
