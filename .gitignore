@@ -29,8 +29,8 @@ go.work.sum
 
 # Build outputs
 tmp/
-holdout_eval
-api
+./holdout_eval
+./api
 
 # Editor/IDE
 # .idea/
