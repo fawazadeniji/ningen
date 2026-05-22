@@ -142,20 +142,23 @@ paths:
                 summary: Electronics review simulation
                 value:
                   user_history:
-                    - item_name: "Logitech MX Master 3"
-                      item_category: "Electronics"
-                      rating: 5.0
+                    - product_id: "h1"
+                      product_name: "Logitech MX Master 3"
+                      product_category: "Electronics"
+                      star_rating: 5.0
                       review_text: "Absolute beast of a mouse. The scroll wheel alone is worth the price."
-                    - item_name: "Anker USB-C Hub"
-                      item_category: "Electronics"
-                      rating: 2.0
+                    - product_id: "h2"
+                      product_name: "Anker USB-C Hub"
+                      product_category: "Electronics"
+                      star_rating: 2.0
                       review_text: "Stopped working after 3 months. Quality has really dropped."
                   target_product:
-                    name: "Razer DeathAdder V3"
-                    category: "Electronics"
+                    product_id: "t1"
+                    product_name: "Razer DeathAdder V3"
+                    product_category: "Electronics"
                     description: "Ergonomic wired gaming mouse, 59g, optical sensor"
                     source: "amazon"
-                  provider: gemini
+                  provider: openai
       responses:
         "200":
           description: Generated review and predicted rating
@@ -285,15 +288,18 @@ components:
 
     ReviewHistoryEntry:
       type: object
-      required: [item_name, item_category, rating, review_text]
+      required: [product_id, review_text, star_rating]
       properties:
-        item_name:
+        product_id:
           type: string
-          description: Name of the item the user reviewed.
-        item_category:
+          description: Unique identifier for the reviewed product.
+        product_name:
+          type: string
+          description: Name of the product the user reviewed.
+        product_category:
           type: string
           description: Product category (e.g. Electronics, Books, Food).
-        rating:
+        star_rating:
           type: number
           format: float
           minimum: 1.0
@@ -302,15 +308,24 @@ components:
         review_text:
           type: string
           description: The full review text the user wrote.
+        review_date:
+          type: string
+          description: Date of the review (optional, free-form string).
+        source:
+          type: string
+          description: Marketplace source (e.g. amazon, jumia).
 
     ReviewTargetProduct:
       type: object
-      required: [name, category]
+      required: [product_id, product_name, product_category]
       properties:
-        name:
+        product_id:
+          type: string
+          description: Unique identifier for the target product.
+        product_name:
           type: string
           description: Product name.
-        category:
+        product_category:
           type: string
           description: Product category.
         description:
@@ -325,6 +340,20 @@ components:
         price:
           type: number
           description: Product price in the given currency.
+        features:
+          type: array
+          items:
+            type: string
+          description: List of product features.
+        rating:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 5.0
+          description: Existing product rating on the marketplace.
+        review_count:
+          type: integer
+          description: Number of existing reviews on the marketplace.
 
     GenerateReviewRequest:
       type: object
