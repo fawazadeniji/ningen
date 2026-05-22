@@ -269,7 +269,8 @@ ningen/
 ├── scripts/
 │   ├── dev.sh                   # Local dev: sources .env, overrides DB/embedder to localhost, runs air
 │   ├── eval.sh                  # Smoke-test harness: cold-start, single-turn, multi-turn, all providers
-│   └── spot_eval.sh             # 2-scenario deep inspection: full JSON + reasoning visible
+│   ├── spot_eval.sh             # 2-scenario deep inspection: full JSON + reasoning visible
+│   └── ablation.sh              # Runs all 6 ablation variants, writes results to OUT_FILE
 │
 └── embedder_service/
     ├── main.py                  # FastAPI ONNX embedder service
@@ -308,6 +309,54 @@ SEEDS_PER_DOMAIN=20 go run ./cmd/holdout_eval
 ```
 
 The holdout evaluator streams items from the end of each source dataset (never ingested), embeds them, finds ground-truth DB neighbors by cosine distance, queries the API, and reports NDCG@10, Hit@10, and MRR per domain. It handles `requires_input` responses by synthesizing a follow-up from the seed text.
+
+### Ablation Studies
+
+Run all 6 pipeline variants (A–F) in the background and save results to a file:
+
+```bash
+nohup OUT_FILE=ablation_results.txt \
+      PROVIDER=gemini \
+      SEEDS_PER_DOMAIN=10 \
+      API_URL=http://localhost:8080 \
+      ./scripts/ablation.sh > ablation.log 2>&1 &
+
+echo "PID: $!  —  tail -f ablation_results.txt to follow"
+```
+
+Check progress:
+
+```bash
+tail -f ablation_results.txt
+```
+
+Variants tested:
+
+| Variant | `SKIP_STAGES` value | Stages disabled |
+| ------- | ------------------- | --------------- |
+| A — Full SIGNAL pipeline | *(none)* | All 5 stages active |
+| B — Pure RAG | `gate,reranker` | No quality gate, no reranker |
+| C — RAG + Reranker | `gate` | No quality gate |
+| D — RAG + Gate | `reranker` | No reranker |
+| E — Single-query retrieval | `multi_vector` | Only 1 search query embedded |
+| F — No corpus grounding | `grounding` | Stage 0 corpus pre-search skipped |
+
+You can also run a single variant manually:
+
+```bash
+SKIP_STAGES=gate,reranker SEEDS_PER_DOMAIN=5 PROVIDER=gemini go run ./cmd/holdout_eval
+```
+
+The `debug_skip` field is also accepted directly in the `POST /recommend` request body for one-off testing:
+
+```json
+{
+  "user_persona": "...",
+  "history": [...],
+  "provider": "gemini",
+  "debug_skip": ["gate", "reranker"]
+}
+```
 
 ---
 
