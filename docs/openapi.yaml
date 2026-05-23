@@ -95,6 +95,7 @@ paths:
                     recommendations:
                       - item_id: "3f7a9c2e-4b81-4d6f-9e32-a1b5c8d70f4e"
                         domain: amazon
+                        name: "Sony WH-1000XM4 Wireless Noise Canceling Headphones"
                         search_text: "Great noise-cancelling headphones, perfect for long flights and focus work..."
                         score: 0.182
                         reasoning: "Aligns with your productivity focus and commute lifestyle."
@@ -257,6 +258,9 @@ components:
           type: string
           enum: [yelp, amazon, goodreads]
           description: Source dataset the item came from.
+        name:
+          type: string
+          description: Resolved product or business name, if available. Omitted when not yet backfilled.
         search_text:
           type: string
           description: The review text excerpt used for embedding and display.
