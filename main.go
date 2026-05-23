@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"ningen/domain"
 	"ningen/embed"
@@ -16,26 +17,45 @@ import (
 )
 
 const (
-	batchSize   = 5_000
-	workerCount = 10
+	batchSize        = 5_000
+	defaultWorkers   = 3
 )
 
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Create a done channel to signal when graceful shutdown is complete
+	shutdownDone := make(chan struct{})
+
 	// Handle graceful shutdown
 	go func() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 		<-sig
-		log.Println("Received termination signal, shutting down...")
+		log.Println("Received termination signal, initiating graceful shutdown...")
+		
+		// Create a shutdown context with timeout
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer shutdownCancel()
+		
+		// Signal the main pipeline to stop
 		cancel()
+		
+		// Wait for run() to complete (with timeout)
+		select {
+		case <-shutdownDone:
+			log.Println("Graceful shutdown completed successfully.")
+		case <-shutdownCtx.Done():
+			log.Println("WARNING: Graceful shutdown timeout exceeded, forcing exit.")
+		}
 	}()
 
 	if err := run(ctx); err != nil {
 		log.Fatalf("ETL Pipeline failed: %v", err)
 	}
+	
+	close(shutdownDone)
 }
 
 func run(ctx context.Context) error {
@@ -45,6 +65,7 @@ func run(ctx context.Context) error {
 	}
 
 	targetItemCount := envInt("TARGET_ITEM_COUNT", 100_000)
+	workerCount := envInt("WORKER_COUNT", defaultWorkers)
 
 	log.Println("Initializing Postgres storage...")
 	db, err := store.NewPostgresStore(ctx, dbURL)
@@ -90,8 +111,8 @@ func run(ctx context.Context) error {
 		{ingest.NewAmazonGzJsonl("https://snap.stanford.edu/data/amazon/productGraph/categoryFiles/reviews_Books.json.gz"), targetItemCount * 25 / 100},
 	}
 
-	rawItems := make(chan domain.Item, 1000)
-	embeddedItems := make(chan domain.Item, 1000)
+	rawItems := make(chan domain.Item, 100)
+	embeddedItems := make(chan domain.Item, 100)
 
 	var wg sync.WaitGroup
 
@@ -162,7 +183,7 @@ func run(ctx context.Context) error {
 		for _, ls := range sources {
 			log.Printf("Streaming from source: %T (limit: %d)", ls.src, ls.limit)
 			sourceCtx, sourceCancel := context.WithCancel(ctx)
-			sourceChan := make(chan domain.Item, 100)
+			sourceChan := make(chan domain.Item, 50)
 			sourceErrChan := make(chan error, 1)
 			go func() {
 				sourceErrChan <- ls.src.Stream(sourceCtx, sourceChan)
@@ -219,6 +240,16 @@ func run(ctx context.Context) error {
 	// Wait for writer to finish or context cancellation
 	select {
 	case <-ctx.Done():
+		log.Println("Context cancelled, waiting for graceful drain...")
+		// When context is cancelled, give workers/writer time to finish in-flight work
+		drainCtx, drainCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		select {
+		case <-writerDone:
+			log.Println("Writer finished gracefully before timeout.")
+		case <-drainCtx.Done():
+			log.Println("WARNING: Drain timeout, some in-flight items may be lost.")
+		}
+		drainCancel()
 		return ctx.Err()
 	case err := <-errChan:
 		return err
