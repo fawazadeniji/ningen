@@ -32,6 +32,8 @@ services:
     image: ${REGISTRY_URL}/${IMAGE_NAME}-etl:${IMAGE_TAG}
     env_file:
       - .env
+    volumes:
+      - ${YELP_DATA_DIR:-/tmp}:/data:ro
     depends_on:
       db:
         condition: service_healthy

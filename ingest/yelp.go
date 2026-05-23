@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net"
 	"net/http"
+	"os"
 	"time"
 	"ningen/domain"
 )
@@ -24,6 +26,25 @@ func NewYelpJsonl(url string) *YelpJsonl {
 }
 
 func (s *YelpJsonl) Stream(ctx context.Context, out chan<- domain.Item) error {
+	// If YELP_FILE points to a local file, use it instead of HTTP.
+	// This is opt-in: the default path is always HTTP streaming.
+	if path := os.Getenv("YELP_FILE"); path != "" {
+		return s.streamFile(ctx, path, out)
+	}
+	return s.streamHTTP(ctx, out)
+}
+
+func (s *YelpJsonl) streamFile(ctx context.Context, path string, out chan<- domain.Item) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("yelp open local file: %w", err)
+	}
+	defer f.Close()
+	log.Printf("Yelp: reading from local file %s", path)
+	return s.scanLines(ctx, f, out)
+}
+
+func (s *YelpJsonl) streamHTTP(ctx context.Context, out chan<- domain.Item) error {
 	// No client-level Timeout: the JSONL file is hundreds of MB and streams for
 	// many minutes. A total-request timeout would kill the connection mid-stream.
 	// Transport-level timeouts guard against hung connections during setup only.
@@ -86,7 +107,11 @@ func (s *YelpJsonl) Stream(ctx context.Context, out chan<- domain.Item) error {
 		return fmt.Errorf("yelp unexpected status: %d", resp.StatusCode)
 	}
 
-	scanner := bufio.NewScanner(resp.Body)
+	return s.scanLines(ctx, resp.Body, out)
+}
+
+func (s *YelpJsonl) scanLines(ctx context.Context, r io.Reader, out chan<- domain.Item) error {
+	scanner := bufio.NewScanner(r)
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 1024*1024)
 
