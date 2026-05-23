@@ -14,6 +14,7 @@ import (
 type Storage interface {
 	Init(ctx context.Context) error
 	Count(ctx context.Context) (int, error)
+	ExistingIDs(ctx context.Context, domain string) (map[string]struct{}, error)
 	BulkInsert(ctx context.Context, items []domain.Item) error
 	CreateIndex(ctx context.Context) error
 	Close()
@@ -59,6 +60,23 @@ func (s *PostgresStore) Init(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (s *PostgresStore) ExistingIDs(ctx context.Context, domain string) (map[string]struct{}, error) {
+	rows, err := s.pool.Query(ctx, `SELECT item_id FROM items WHERE domain = $1`, domain)
+	if err != nil {
+		return nil, fmt.Errorf("existing ids query: %w", err)
+	}
+	defer rows.Close()
+	ids := make(map[string]struct{})
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids[id] = struct{}{}
+	}
+	return ids, rows.Err()
 }
 
 func (s *PostgresStore) Count(ctx context.Context) (int, error) {

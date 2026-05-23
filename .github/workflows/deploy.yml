@@ -81,9 +81,14 @@ jobs:
             AZURE_OPENAI_API_VERSION=${{ secrets.AZURE_OPENAI_API_VERSION }}
             AZURE_OPENAI_MODEL=${{ secrets.AZURE_OPENAI_MODEL }}
             TARGET_ITEM_COUNT=${{ secrets.TARGET_ITEM_COUNT }}
+            WORKER_COUNT=${{ secrets.WORKER_COUNT }}
             MODEL_DIR=/models
             PORT=8080
-            
+
+            # Local Yelp file (optional — set YELP_DATA_DIR on the VM to activate)
+            YELP_DATA_DIR=${{ secrets.YELP_DATA_DIR }}
+            YELP_FILE=${{ secrets.YELP_FILE }}
+
             # Deployment Variables for Compose
             REGISTRY_URL=${{ env.REGISTRY }}
             IMAGE_NAME=${{ env.IMAGE_NAME }}

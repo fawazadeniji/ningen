@@ -90,6 +90,15 @@ func run(ctx context.Context) error {
 	}
 	log.Printf("Current item count is %d. Starting ETL process...", count)
 
+	// Pre-filter: load IDs already in the DB for sources we re-stream from scratch.
+	// Items in this set are skipped before embedding, saving embedder CPU on duplicates.
+	log.Println("Loading existing Yelp IDs for pre-filter...")
+	existingYelpIDs, err := db.ExistingIDs(ctx, "yelp")
+	if err != nil {
+		return fmt.Errorf("load existing yelp ids: %w", err)
+	}
+	log.Printf("Pre-filter loaded %d existing Yelp IDs", len(existingYelpIDs))
+
 	embedderURL := os.Getenv("EMBEDDER_URL")
 	if embedderURL == "" {
 		embedderURL = "http://embedder:8000"
@@ -212,6 +221,12 @@ func run(ctx context.Context) error {
 						log.Printf("Source %T hit per-source limit (%d). Moving to next source.", ls.src, ls.limit)
 						sourceCancel()
 						break streamLoop
+					}
+
+					// Skip items already in the DB (pre-filter) to avoid
+					// wasting embedder CPU re-embedding known duplicates.
+					if _, exists := existingYelpIDs[item.ID]; exists {
+						continue
 					}
 
 					select {
