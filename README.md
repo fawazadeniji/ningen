@@ -17,6 +17,23 @@ All outputs are post-processed through a Nigerian cultural humanizer so response
 
 ---
 
+## Live Data (Production)
+
+As of submission (24 May 2026), the production instance at `ningen.firebcorps.online` holds:
+
+| Domain | Items | Named |
+| ------ | ----- | ----- |
+| Amazon Electronics | ~249,000 | ~249,000 (100% — backfilled from SNAP metadata) |
+| Amazon Books | ~250,000 | ~250,000 (100% — backfilled from SNAP metadata) |
+| Yelp restaurant reviews | ~270,000 | 0 (dataset strips business names — see Limitations) |
+| **Total** | **~770,000** | **~500,000** |
+
+**Amazon name resolution:** After ETL, a one-shot backfill script re-streams the SNAP metadata files (`meta_Electronics.json.gz`, `meta_Books.json.gz`), joins on ASIN, recomputes the same deterministic item_ids, and `UPDATE`s `metadata->>'name'` for each matching row. The `/recommend` endpoint returns `"name"` in the response when available.
+
+**Yelp limitation:** The public Yelp dataset used (SetFit/yelp_review_full) deliberately strips business metadata — only star labels and review text are provided. Business names cannot be recovered without the full Yelp Open Dataset (requires academic license). This is documented as a known limitation.
+
+---
+
 ## Architecture
 
 ```
@@ -170,10 +187,11 @@ Conversational recommendation. Pass a user persona and chat history; receive ran
   "recommendations": [
     {
       "item_id": "uuid",
-      "domain": "goodreads",
-      "search_text": "Review text excerpt...",
-      "score": 0.312,
-      "reasoning": "This fits your mood for introspective fiction on a long journey."
+      "domain": "amazon",
+      "name": "Sony WH-1000XM4 Wireless Noise Canceling Headphones",
+      "search_text": "Great noise-cancelling headphones, perfect for long flights...",
+      "score": 0.182,
+      "reasoning": "Aligns with your productivity focus and commute lifestyle."
     }
   ],
   "reasoning": "Omo, for that long flight you won't regret picking up..."
@@ -190,6 +208,8 @@ Conversational recommendation. Pass a user persona and chat history; receive ran
 ```
 
 `score` is cosine distance — lower means more similar. Items are ordered by psychographic rank (not raw score).
+
+`name` is the resolved product name from SNAP metadata. Present for Amazon items after the backfill; absent (field omitted) for Yelp items.
 
 ### `GET /health`
 
@@ -225,6 +245,8 @@ Copy `.env.example` to `.env`. At least one LLM key is required or the API serve
 ningen/
 ├── cmd/
 │   ├── api/main.go              # API server entry point
+│   ├── backfill_amazon_names/
+│   │   └── main.go              # One-shot: join SNAP metadata → UPDATE metadata->>'name'
 │   └── holdout_eval/
 │       ├── main.go              # Offline evaluation: NDCG@10, Hit@10, MRR
 │       └── metrics_test.go      # Unit tests for ranking metrics
@@ -286,15 +308,41 @@ The pipeline runs once and exits. Data is streamed directly from source URLs —
 
 **Sources (in order):**
 
-1. Amazon Electronics — gzipped JSONL (~1.7M reviews)
-2. Amazon Books — gzipped JSONL (~8M reviews, overflow if Electronics runs short)
-3. Goodreads Book Reviews — CSV (cross-domain diversity)
+1. Yelp restaurant reviews — JSONL from HuggingFace (SetFit/yelp_review_full), 50% of target
+2. Amazon Electronics — gzipped JSONL from SNAP (~1.7M reviews), 25% of target
+3. Amazon Books — gzipped JSONL from SNAP (~8M reviews), 25% of target
 
 **Dedup:** Item IDs are UUID v5 derived from `domain + review_text`. Reingest of the same content produces the same ID and is silently skipped via `ON CONFLICT (item_id) DO NOTHING`.
 
-**Target:** Configurable via `TARGET_ITEM_COUNT` (default: `100000`). Set to `25000` for a quick evaluation run (~8 min). The HNSW index (`vector_cosine_ops`) is created after all inserts to avoid write amplification during bulk load.
+**Target:** Configurable via `TARGET_ITEM_COUNT` env var (default: `1,000,000` in production). Per-source limits (50/25/25) ensure domain diversity regardless of target size.
 
-**Resume:** On restart the pipeline counts existing rows and skips that many items from the beginning of the source stream. Safe to interrupt and resume.
+**Pre-filter:** At startup the ETL worker loads all existing Yelp item IDs into memory (`ExistingIDs` query). Items already in the DB are skipped before embedding — avoids re-embedding known duplicates and saves embedder CPU on restarts.
+
+**Local file fallback:** Set `YELP_FILE=/data/yelp_train.jsonl` to read from a local file instead of streaming over HTTP. The volume mount `YELP_DATA_DIR` exposes the host path to the container.
+
+**Resume:** On restart the pipeline counts existing rows. If `count >= TARGET_ITEM_COUNT`, it exits immediately. Otherwise it resumes from the next un-ingested item (Yelp pre-filter handles dedup; Amazon uses `ON CONFLICT DO NOTHING`).
+
+### Amazon Name Backfill
+
+After ETL, run `cmd/backfill_amazon_names` inside the ETL container to resolve product names from SNAP metadata files. Safe to run alongside the API server — only updates `metadata->>'name'` for rows where it is `NULL`.
+
+```bash
+# Electronics (run after Electronics ETL)
+docker run --rm --env-file .env --network <stack>_default \
+  --entrypoint go <etl-image> \
+  run ./cmd/backfill_amazon_names
+
+# Books (run with overridden URLs)
+docker run --rm --env-file .env --network <stack>_default \
+  -e META_URL=https://snap.stanford.edu/data/amazon/productGraph/categoryFiles/meta_Books.json.gz \
+  -e REVIEWS_URL=https://snap.stanford.edu/data/amazon/productGraph/categoryFiles/reviews_Books.json.gz \
+  --entrypoint go <etl-image> \
+  run ./cmd/backfill_amazon_names
+```
+
+Env vars: `DRY_RUN=true` prints matches without writing. `DB_URL`, `META_URL`, `REVIEWS_URL` are all overrideable.
+
+**Verification:** Before any writes, the script streams 500 reviews, computes their item_ids, and confirms ≥10/20 exist in the DB. Aborts if the ID formula doesn't match — prevents silently writing names to wrong items.
 
 ---
 
@@ -582,3 +630,16 @@ All nodes support model overrides. See [internal/pipeline/nodes/model_overrides_
 **Multi-LLM registry.** Providers are registered at startup based on which env vars are present. Switching providers requires only changing the `provider` field in the request — no code changes. Useful for ablation in the solution paper.
 
 **Deterministic item IDs.** UUIDs are derived via SHA-1 from `domain + review_text`. The same review always gets the same ID across runs, enabling `ON CONFLICT DO NOTHING` dedup without a separate uniqueness check.
+
+**search_text vs item_id:** The ETL worker truncates `search_text` to 1,000 characters for the embedding (long reviews degrade retrieval quality), but the item_id is computed from the *full* untruncated text before truncation. This means you cannot recompute item_id from `search_text` alone — the backfill script addresses this by re-streaming the original reviews file rather than querying the DB's search_text.
+
+---
+
+## Limitations
+
+| Limitation | Detail |
+| ---------- | ------ |
+| **Yelp business names** | The SetFit/yelp_review_full dataset strips business names — only star labels and review text are available. The full Yelp Open Dataset (business names included) requires an academic license. `/recommend` omits `name` for all Yelp items. |
+| **Amazon Books metadata** | The SNAP `meta_Books.json.gz` is ~2 GB and uses Python-literal dict format. The backfill parses it via regex fallback, which may miss titles containing apostrophes. |
+| **Single embedder thread** | The ONNX embedder sidecar runs on CPU. On a weak VM (2 vCPU), docker resource limits (`--cpus 1.0`) prevent embedder from consuming all cores and triggering Azure VM deallocation. This caps throughput to ~820 items/min. |
+| **Yelp HTTP streaming** | The 485 MB Yelp JSONL file streams over HTTP. Very slow networks may time out at the TCP level even without an application timeout. Use `YELP_FILE` env var + volume mount for reliable offline operation. |
