@@ -186,10 +186,10 @@ func RecommendHandler(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		rerankerPool := candidates
-		if len(rerankerPool) > 20 {
-			rerankerPool = rerankerPool[:20]
-		}
+		// Build the reranker pool. When cross_domain is true we interleave by domain
+		// (round-robin top-N per domain) so the reranker sees a balanced slate rather
+		// than the score-sorted top-20 which is still Yelp-dominated.
+		rerankerPool := buildRerankerPool(candidates, 20, req.CrossDomain)
 		rankCtx, rankCancel := context.WithTimeout(ctx, agentTimeout)
 		ranked, err := agents.NewReranker(provider).Rank(rankCtx, signal, rerankerPool, req.CrossDomain)
 		rankCancel()
@@ -365,6 +365,49 @@ func deduplicateByEntity(results []rag.Result) []rag.Result {
 		}
 	}
 	return deduped
+}
+
+// buildRerankerPool selects up to limit candidates for the reranker.
+// When crossDomain is true it interleaves the top candidates round-robin by domain
+// so the LLM sees a balanced mix rather than the score-sorted top-N (which is
+// biased toward whichever domain has lower cosine distances for this query).
+func buildRerankerPool(candidates []rag.Result, limit int, crossDomain bool) []rag.Result {
+	if !crossDomain || len(candidates) <= limit {
+		if len(candidates) > limit {
+			return candidates[:limit]
+		}
+		return candidates
+	}
+
+	// Group by domain, preserving per-domain score order.
+	byDomain := make(map[string][]rag.Result)
+	for _, c := range candidates {
+		byDomain[c.Domain] = append(byDomain[c.Domain], c)
+	}
+	domains := make([]string, 0, len(byDomain))
+	for d := range byDomain {
+		domains = append(domains, d)
+	}
+	sort.Strings(domains) // deterministic order
+
+	pool := make([]rag.Result, 0, limit)
+	for len(pool) < limit {
+		added := 0
+		for _, d := range domains {
+			if len(pool) >= limit {
+				break
+			}
+			if len(byDomain[d]) > 0 {
+				pool = append(pool, byDomain[d][0])
+				byDomain[d] = byDomain[d][1:]
+				added++
+			}
+		}
+		if added == 0 {
+			break // all domain buckets exhausted
+		}
+	}
+	return pool
 }
 
 // buildOrderedItems maps the reranker's ranked IDs back to full candidate data.
