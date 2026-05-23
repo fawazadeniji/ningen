@@ -27,6 +27,7 @@ type RecommendRequest struct {
 type RecommendedItem struct {
 	ItemID     string  `json:"item_id"`
 	Domain     string  `json:"domain"`
+	Name       string  `json:"name,omitempty"`       // product/business name, when available
 	SearchText string  `json:"search_text"`
 	Score      float64 `json:"score"`
 	Reasoning  string  `json:"reasoning,omitempty"` // per-item psychographic fit explanation

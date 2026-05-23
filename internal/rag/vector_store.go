@@ -15,6 +15,7 @@ type Result struct {
 	Domain     string
 	SearchText string
 	Score      float64
+	Name       string // product/business name from metadata, empty when not backfilled yet
 }
 
 // VectorStore wraps the Postgres connection pool and exposes
@@ -47,7 +48,8 @@ func (vs *VectorStore) Search(ctx context.Context, embedding []float32, limit in
 		}
 		query = fmt.Sprintf(`
 			SELECT item_id, domain, search_text,
-			       (embedding <=> $1::vector) AS distance
+			       (embedding <=> $1::vector) AS distance,
+			       COALESCE(metadata->>'name', '') AS name
 			FROM   items
 			WHERE  domain IN (%s)
 			ORDER  BY distance
@@ -58,7 +60,8 @@ func (vs *VectorStore) Search(ctx context.Context, embedding []float32, limit in
 		args = []any{vecLiteral, limit}
 		query = `
 			SELECT item_id, domain, search_text,
-			       (embedding <=> $1::vector) AS distance
+			       (embedding <=> $1::vector) AS distance,
+			       COALESCE(metadata->>'name', '') AS name
 			FROM   items
 			ORDER  BY distance
 			LIMIT  $2`
@@ -73,7 +76,7 @@ func (vs *VectorStore) Search(ctx context.Context, embedding []float32, limit in
 	var results []Result
 	for rows.Next() {
 		var r Result
-		if err := rows.Scan(&r.ItemID, &r.Domain, &r.SearchText, &r.Score); err != nil {
+		if err := rows.Scan(&r.ItemID, &r.Domain, &r.SearchText, &r.Score, &r.Name); err != nil {
 			return nil, fmt.Errorf("vector search scan: %w", err)
 		}
 		results = append(results, r)
@@ -90,7 +93,8 @@ func (vs *VectorStore) Search(ctx context.Context, embedding []float32, limit in
 // when no meaningful embedding is available (e.g. new user, no history).
 func (vs *VectorStore) SearchByText(ctx context.Context, query string, limit int) ([]Result, error) {
 	rows, err := vs.pool.Query(ctx, `
-		SELECT item_id, domain, search_text, 0.0 AS distance
+		SELECT item_id, domain, search_text, 0.0 AS distance,
+		       COALESCE(metadata->>'name', '') AS name
 		FROM   items
 		WHERE  search_text ILIKE $1
 		LIMIT  $2`,
@@ -104,7 +108,7 @@ func (vs *VectorStore) SearchByText(ctx context.Context, query string, limit int
 	var results []Result
 	for rows.Next() {
 		var r Result
-		if err := rows.Scan(&r.ItemID, &r.Domain, &r.SearchText, &r.Score); err != nil {
+		if err := rows.Scan(&r.ItemID, &r.Domain, &r.SearchText, &r.Score, &r.Name); err != nil {
 			return nil, fmt.Errorf("text search scan: %w", err)
 		}
 		results = append(results, r)

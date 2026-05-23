@@ -171,6 +171,7 @@ func RecommendHandler(d *Deps) http.HandlerFunc {
 				items = append(items, models.RecommendedItem{
 					ItemID:     c.ItemID,
 					Domain:     c.Domain,
+					Name:       c.Name,
 					SearchText: c.SearchText,
 					Score:      c.Score,
 				})
@@ -352,6 +353,7 @@ func buildOrderedItems(ranked *agents.RerankResult, candidates []rag.Result, lim
 		items = append(items, models.RecommendedItem{
 			ItemID:     c.ItemID,
 			Domain:     c.Domain,
+			Name:       c.Name,
 			SearchText: c.SearchText,
 			Score:      c.Score,
 			Reasoning:  ranked.ItemReasoning[id],
@@ -368,6 +370,7 @@ func buildOrderedItems(ranked *agents.RerankResult, candidates []rag.Result, lim
 			items = append(items, models.RecommendedItem{
 				ItemID:     c.ItemID,
 				Domain:     c.Domain,
+				Name:       c.Name,
 				SearchText: c.SearchText,
 				Score:      c.Score,
 			})
