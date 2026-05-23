@@ -121,6 +121,16 @@ func (vs *VectorStore) SearchByText(ctx context.Context, query string, limit int
 // Results are deduplicated by item_id, keeping the best (lowest) cosine distance per item.
 // The returned slice is sorted ascending by score and capped at limit.
 func (vs *VectorStore) SearchByVectors(ctx context.Context, vecs [][]float32, limit int) ([]Result, error) {
+	return vs.searchByVectorsFiltered(ctx, vecs, limit, nil)
+}
+
+// SearchByVectorsDomain is like SearchByVectors but restricted to a single domain.
+// Used for cross-domain balanced retrieval so no domain dominates the candidate pool.
+func (vs *VectorStore) SearchByVectorsDomain(ctx context.Context, vecs [][]float32, limit int, domain string) ([]Result, error) {
+	return vs.searchByVectorsFiltered(ctx, vecs, limit, []string{domain})
+}
+
+func (vs *VectorStore) searchByVectorsFiltered(ctx context.Context, vecs [][]float32, limit int, domains []string) ([]Result, error) {
 	seen := make(map[string]Result)
 	var lastErr error
 	perQuery := limit * 2
@@ -128,7 +138,7 @@ func (vs *VectorStore) SearchByVectors(ctx context.Context, vecs [][]float32, li
 		perQuery = 200
 	}
 	for _, vec := range vecs {
-		results, err := vs.Search(ctx, vec, perQuery, nil)
+		results, err := vs.Search(ctx, vec, perQuery, domains)
 		if err != nil {
 			lastErr = err
 			continue

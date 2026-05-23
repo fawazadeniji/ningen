@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,6 +14,11 @@ import (
 	"ningen/internal/models"
 	"ningen/internal/rag"
 )
+
+// crossDomainDomains lists domains balanced across when cross_domain=true.
+// Each gets an equal quota of the candidate pool so no domain dominates via
+// embedding-space proximity (e.g. short Yelp reviews score better for lifestyle queries).
+var crossDomainDomains = []string{"yelp", "amazon"}
 
 const neutralHumanizerPrompt = `You are a warm, professional advisor. Rewrite the provided text to be clear, friendly, and conversational — like a knowledgeable human speaking directly to the user. Keep every fact and recommendation intact. Output only the rewritten text, nothing else.`
 
@@ -127,7 +133,7 @@ func RecommendHandler(d *Deps) http.HandlerFunc {
 		if skip["multi_vector"] && len(signal.SearchQueries) > 1 {
 			signal.SearchQueries = signal.SearchQueries[:1]
 		}
-		candidates, err := retrieveBySignal(ctx, d, signal, candidatePoolSize)
+		candidates, err := retrieveBySignal(ctx, d, signal, candidatePoolSize, req.CrossDomain)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "retrieval failed: "+err.Error())
 			return
@@ -151,7 +157,7 @@ func RecommendHandler(d *Deps) http.HandlerFunc {
 				case agents.GateRefine:
 					if len(gateResult.RefinedQueries) > 0 {
 						signal.SearchQueries = gateResult.RefinedQueries
-						if refined, refineErr := retrieveBySignal(ctx, d, signal, candidatePoolSize); refineErr != nil || len(refined) == 0 {
+						if refined, refineErr := retrieveBySignal(ctx, d, signal, candidatePoolSize, req.CrossDomain); refineErr != nil || len(refined) == 0 {
 							log.Printf("gate REFINE retrieval failed (keeping original): %v", refineErr)
 						} else {
 							candidates = refined
@@ -204,7 +210,11 @@ func RecommendHandler(d *Deps) http.HandlerFunc {
 // retrieveBySignal embeds each search query from the signal and unions the results.
 // Falls back to full-text search on the intent phrase if embedding fails.
 // Results are deduplicated by search_text to remove corpus duplicates.
-func retrieveBySignal(ctx context.Context, d *Deps, signal *models.UserSignal, poolSize int) ([]rag.Result, error) {
+//
+// When crossDomain is true, retrieval fetches an equal quota from each known
+// domain before merging. This prevents embedding-space bias (short Yelp reviews
+// score closer to lifestyle queries) from drowning out Amazon/Books candidates.
+func retrieveBySignal(ctx context.Context, d *Deps, signal *models.UserSignal, poolSize int, crossDomain bool) ([]rag.Result, error) {
 	vecs := make([][]float32, 0, len(signal.SearchQueries))
 	for _, q := range signal.SearchQueries {
 		vec, err := d.Embed.Embed(ctx, q)
@@ -215,9 +225,35 @@ func retrieveBySignal(ctx context.Context, d *Deps, signal *models.UserSignal, p
 
 	var results []rag.Result
 	if len(vecs) > 0 {
-		r, err := d.Vector.SearchByVectors(ctx, vecs, poolSize)
-		if err == nil && len(r) > 0 {
-			results = r
+		if crossDomain {
+			// Balanced retrieval: fetch quota per domain so each is represented.
+			quota := poolSize / len(crossDomainDomains)
+			if quota < 10 {
+				quota = 10
+			}
+			seen := make(map[string]rag.Result)
+			for _, domain := range crossDomainDomains {
+				r, err := d.Vector.SearchByVectorsDomain(ctx, vecs, quota, domain)
+				if err != nil || len(r) == 0 {
+					continue
+				}
+				for _, item := range r {
+					if existing, ok := seen[item.ItemID]; !ok || item.Score < existing.Score {
+						seen[item.ItemID] = item
+					}
+				}
+			}
+			merged := make([]rag.Result, 0, len(seen))
+			for _, r := range seen {
+				merged = append(merged, r)
+			}
+			sort.Slice(merged, func(i, j int) bool { return merged[i].Score < merged[j].Score })
+			results = merged
+		} else {
+			r, err := d.Vector.SearchByVectors(ctx, vecs, poolSize)
+			if err == nil && len(r) > 0 {
+				results = r
+			}
 		}
 	}
 
