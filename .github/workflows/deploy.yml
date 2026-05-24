@@ -98,9 +98,9 @@ jobs:
             # 3. Pull the latest images to minimize downtime
             docker compose -f docker-compose.prod.yml pull
 
-            # 4. Deploy the stack
-            # This recreates containers with updated images and starts them in the background
-            docker compose -f docker-compose.prod.yml up -d
+            # 4. Deploy only api + embedder. ETL is a one-shot job — never restart on deploy.
+            docker compose -f docker-compose.prod.yml up -d db embedder api
+            docker compose -f docker-compose.prod.yml stop etl_worker || true
 
             # 5. Clean up old resources
             docker image prune -f --filter "dangling=true" --filter "until=168h"
