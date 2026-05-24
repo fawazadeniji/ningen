@@ -16,9 +16,15 @@
 //	PROVIDER         gemini
 //	SEEDS_PER_DOMAIN 20
 //	GT_THRESHOLD     0.45   (cosine distance — lower = stricter ground truth)
+//	STRATIFIED       false  set "true" to enable stratified seed collection:
+//	                        - Yelp: reads YELP_SEEDS_FILE (pre-built stratified seeds)
+//	                        - Amazon: single-pass multi-offset streaming (4 positions × SEEDS_PER_DOMAIN/4)
+//	                        - Goodreads: streams SEEDS_PER_DOMAIN consecutive items (unchanged)
+//	YELP_SEEDS_FILE           path to stratified Yelp seeds JSONL (required when STRATIFIED=true)
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -27,6 +33,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -58,6 +65,8 @@ func main() {
 	gtThresh := envFloat("GT_THRESHOLD", 0.45)
 	skipStages := envOr("SKIP_STAGES", "")
 	outFile := envOr("OUT_FILE", "")
+	stratified := os.Getenv("STRATIFIED") == "true"
+	yelpSeedsFile := envOr("YELP_SEEDS_FILE", "")
 
 	log.Printf("holdout_eval  provider=%s  seeds/domain=%d  gt_threshold=%.2f  skip=%q  out=%q",
 		provider, nSeeds, gtThresh, skipStages, outFile)
@@ -125,11 +134,36 @@ func main() {
 		},
 	}
 
+	// Amazon multi-offset positions: spread 4 windows across the holdout range so we
+	// sample different product clusters rather than consecutive rows (all same product).
+	amazonOffsets := []int{
+		counts["amazon"],
+		counts["amazon"] + 100_000,
+		counts["amazon"] + 250_000,
+		counts["amazon"] + 400_000,
+	}
+	seedsPerOffset := nSeeds / len(amazonOffsets)
+	if seedsPerOffset < 1 {
+		seedsPerOffset = 1
+	}
+
 	for _, job := range jobs {
 		fmt.Printf("\n%s\n", strings.Repeat("═", 60))
-		fmt.Printf("DOMAIN: %s  (skipping %d ingested rows)\n", strings.ToUpper(job.name), job.skip)
 
-		texts := collectHoldout(ctx, job.src, job.skip, nSeeds)
+		var texts []string
+		switch {
+		case stratified && job.name == "yelp" && yelpSeedsFile != "":
+			fmt.Printf("DOMAIN: %s  (stratified — reading %s)\n", strings.ToUpper(job.name), yelpSeedsFile)
+			texts = collectYelpStratified(yelpSeedsFile)
+		case stratified && job.name == "amazon":
+			fmt.Printf("DOMAIN: %s  (stratified — offsets %v, %d seeds each)\n",
+				strings.ToUpper(job.name), amazonOffsets, seedsPerOffset)
+			texts = collectHoldoutMultiSkip(ctx, job.src, amazonOffsets, seedsPerOffset)
+		default:
+			fmt.Printf("DOMAIN: %s  (skipping %d ingested rows)\n", strings.ToUpper(job.name), job.skip)
+			texts = collectHoldout(ctx, job.src, job.skip, nSeeds)
+		}
+
 		if len(texts) == 0 {
 			fmt.Printf("  WARNING: no holdout items retrieved for %s\n", job.name)
 			continue
@@ -144,6 +178,89 @@ func main() {
 
 	fmt.Printf("\n%s\n", strings.Repeat("═", 60))
 	printOverallReport(allResults)
+}
+
+// collectYelpStratified reads a pre-built seeds JSONL file (one {"text":"..."} per line)
+// and returns each item's text. The file is generated offline for stratified star-rating coverage.
+func collectYelpStratified(file string) []string {
+	f, err := os.Open(file)
+	if err != nil {
+		log.Printf("  cannot open yelp seeds file %q: %v", file, err)
+		return nil
+	}
+	defer f.Close()
+
+	var texts []string
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		var item struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(sc.Bytes(), &item); err != nil || item.Text == "" {
+			continue
+		}
+		texts = append(texts, item.Text)
+	}
+	log.Printf("  loaded %d stratified Yelp seeds from %s", len(texts), file)
+	return texts
+}
+
+// collectHoldoutMultiSkip streams src once and collects n items starting at each offset.
+// Offsets must be non-decreasing. Each item is assigned to the first offset bucket that
+// is (a) not yet full and (b) whose threshold the current row index has reached.
+// This avoids re-downloading the source file for each sampling window.
+func collectHoldoutMultiSkip(ctx context.Context, src ingest.Source, offsets []int, n int) []string {
+	sorted := make([]int, len(offsets))
+	copy(sorted, offsets)
+	sort.Ints(sorted)
+
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	ch := make(chan domain.Item, 200)
+	go func() {
+		if err := src.Stream(streamCtx, ch); err != nil && streamCtx.Err() == nil {
+			log.Printf("  source error: %v", err)
+		}
+		close(ch)
+	}()
+
+	buckets := make([][]string, len(sorted))
+	row := 0
+
+	for item := range ch {
+		for i, off := range sorted {
+			if row >= off && len(buckets[i]) < n {
+				buckets[i] = append(buckets[i], item.SearchText)
+				break
+			}
+		}
+		done := true
+		for _, b := range buckets {
+			if len(b) < n {
+				done = false
+				break
+			}
+		}
+		if done {
+			cancel()
+			break
+		}
+		row++
+		if row%50_000 == 0 {
+			log.Printf("  streamed %d rows...", row)
+		}
+	}
+	for range ch {
+	}
+
+	var all []string
+	for i, b := range buckets {
+		log.Printf("  offset[%d]=%d  collected %d seeds", i, sorted[i], len(b))
+		all = append(all, b...)
+	}
+	return all
 }
 
 // collectHoldout streams from src, discards `skip` items, then returns the next `n` texts.
