@@ -266,7 +266,7 @@ func retrieveBySignal(ctx context.Context, d *Deps, signal *models.UserSignal, p
 		results = r
 	}
 
-	return deduplicateByEntity(deduplicateByText(results)), nil
+	return deduplicateResults(results), nil
 }
 
 // sampleCorpus embeds the last user turn and retrieves 5 representative items from the DB.
@@ -298,16 +298,49 @@ func sampleCorpus(ctx context.Context, d *Deps, history []models.ConversationTur
 	return examples
 }
 
-// deduplicateByText removes results with identical search_text, keeping the best-scored copy.
-// Results must already be sorted ascending by score (best first).
-func deduplicateByText(results []rag.Result) []rag.Result {
-	seen := make(map[string]bool, len(results))
+// deduplicateResults removes items that represent the same underlying entity, keeping the
+// best-scored copy. Results must be sorted ascending by score (best first) before calling.
+//
+// Three signals are checked per item; the first match wins:
+//  1. Exact search_text match — literal duplicate review text.
+//  2. Name match — same `domain + normalized name` (catches multiple reviews of the same
+//     product/business when the Name field is backfilled from metadata).
+//  3. Entity match — same `domain + first ≥2 consecutive capitalised words` found in
+//     search_text (catches cases where the name is embedded in the review body).
+//
+// Items that produce no signal from checks 2 or 3 are always kept.
+func deduplicateResults(results []rag.Result) []rag.Result {
+	seenText := make(map[string]bool, len(results))
+	seenName := make(map[string]bool, len(results))
+	seenEntity := make(map[string]bool, len(results))
 	deduped := make([]rag.Result, 0, len(results))
+
 	for _, r := range results {
-		if !seen[r.SearchText] {
-			seen[r.SearchText] = true
-			deduped = append(deduped, r)
+		// 1. Exact text duplicate
+		if seenText[r.SearchText] {
+			continue
 		}
+		seenText[r.SearchText] = true
+
+		// 2. Name-based duplicate (domain-scoped so same-named things in different domains are kept)
+		if r.Name != "" {
+			nameKey := r.Domain + ":" + strings.ToLower(strings.TrimSpace(r.Name))
+			if seenName[nameKey] {
+				continue
+			}
+			seenName[nameKey] = true
+		}
+
+		// 3. Entity-based duplicate via capitalised-word fingerprint
+		if ek := entityKey(r.SearchText); ek != "" {
+			entityComposite := r.Domain + ":" + ek
+			if seenEntity[entityComposite] {
+				continue
+			}
+			seenEntity[entityComposite] = true
+		}
+
+		deduped = append(deduped, r)
 	}
 	return deduped
 }
@@ -342,29 +375,6 @@ func entityKey(text string) string {
 		return ""
 	}
 	return strings.Join(run, " ")
-}
-
-// deduplicateByEntity removes candidates that appear to be reviews of the same named entity.
-// Fingerprinting uses the first ≥2 consecutive capitalised words found in search_text.
-// Domain is included in the composite key so same-named entities across domains are kept.
-// Items with no detectable entity are never suppressed.
-// Results must already be sorted ascending by score so the best review survives.
-func deduplicateByEntity(results []rag.Result) []rag.Result {
-	seen := make(map[string]bool, len(results))
-	deduped := make([]rag.Result, 0, len(results))
-	for _, r := range results {
-		key := entityKey(r.SearchText)
-		if key == "" {
-			deduped = append(deduped, r)
-			continue
-		}
-		composite := r.Domain + ":" + key
-		if !seen[composite] {
-			seen[composite] = true
-			deduped = append(deduped, r)
-		}
-	}
-	return deduped
 }
 
 // buildRerankerPool selects up to limit candidates for the reranker.

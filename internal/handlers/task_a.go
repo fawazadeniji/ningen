@@ -18,6 +18,9 @@ type GenerateReviewRequest struct {
 	TargetProduct  ReviewTargetProduct  `json:"target_product"`
 	Provider       string               `json:"provider"`
 	ModelOverrides map[string]string    `json:"model_overrides"` // Optional: per-node model overrides
+	// NigerianFlavor controls whether the review uses Nigerian vernacular and localized product context.
+	// Defaults to true when omitted.
+	NigerianFlavor *bool `json:"nigerian_flavor,omitempty"`
 }
 
 // ReviewHistoryEntry describes one item from the user's prior review history.
@@ -81,10 +84,12 @@ func GenerateReviewHandler(d *Deps) http.HandlerFunc {
 		ctx, cancel := context.WithTimeout(r.Context(), workflowTimeout)
 		defer cancel()
 
+		nigerian := req.NigerianFlavor == nil || *req.NigerianFlavor
 		state, err := pipeline.ExecuteWorkflow(ctx, model, pipeline.AgentState{
 			UserHistory:    req.UserHistory,
 			TargetProduct:  req.TargetProduct,
 			ModelOverrides: req.ModelOverrides,
+			NigerianFlavor: nigerian,
 		})
 		if err != nil {
 			// Check if it's a workflow error with node information

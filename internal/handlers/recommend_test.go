@@ -8,15 +8,15 @@ import (
 	"ningen/internal/rag"
 )
 
-// ── deduplicateByText ─────────────────────────────────────────────────────────
+// ── deduplicateResults ───────────────────────────────────────────────────────
 
-func TestDeduplicateByText_RemovesDuplicates(t *testing.T) {
+func TestDeduplicateResults_RemovesDuplicateText(t *testing.T) {
 	results := []rag.Result{
 		{ItemID: "a", SearchText: "hello world", Score: 0.1},
 		{ItemID: "b", SearchText: "hello world", Score: 0.2}, // same text, worse score
 		{ItemID: "c", SearchText: "different text", Score: 0.3},
 	}
-	got := deduplicateByText(results)
+	got := deduplicateResults(results)
 	if len(got) != 2 {
 		t.Fatalf("expected 2 results after dedup, got %d", len(got))
 	}
@@ -25,19 +25,45 @@ func TestDeduplicateByText_RemovesDuplicates(t *testing.T) {
 	}
 }
 
-func TestDeduplicateByText_NoDuplicates(t *testing.T) {
+func TestDeduplicateResults_RemovesDuplicateName(t *testing.T) {
+	results := []rag.Result{
+		{ItemID: "a", Domain: "amazon", Name: "Sabriel", SearchText: "first review", Score: 0.3},
+		{ItemID: "b", Domain: "amazon", Name: "Sabriel", SearchText: "second review", Score: 0.4},
+		{ItemID: "c", Domain: "amazon", Name: "Other Book", SearchText: "other review", Score: 0.5},
+	}
+	got := deduplicateResults(results)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 results (one Sabriel + Other Book), got %d", len(got))
+	}
+	if got[0].ItemID != "a" {
+		t.Errorf("should keep best-scored Sabriel, got %q", got[0].ItemID)
+	}
+}
+
+func TestDeduplicateResults_SameNameDifferentDomain_Kept(t *testing.T) {
+	results := []rag.Result{
+		{ItemID: "a", Domain: "amazon", Name: "Inception", SearchText: "amazon review", Score: 0.1},
+		{ItemID: "b", Domain: "yelp", Name: "Inception", SearchText: "yelp review", Score: 0.2},
+	}
+	got := deduplicateResults(results)
+	if len(got) != 2 {
+		t.Errorf("same name across different domains should both be kept, got %d", len(got))
+	}
+}
+
+func TestDeduplicateResults_NoDuplicates(t *testing.T) {
 	results := []rag.Result{
 		{ItemID: "a", SearchText: "text one", Score: 0.1},
 		{ItemID: "b", SearchText: "text two", Score: 0.2},
 	}
-	got := deduplicateByText(results)
+	got := deduplicateResults(results)
 	if len(got) != 2 {
 		t.Errorf("expected 2 results, got %d", len(got))
 	}
 }
 
-func TestDeduplicateByText_Empty(t *testing.T) {
-	got := deduplicateByText(nil)
+func TestDeduplicateResults_Empty(t *testing.T) {
+	got := deduplicateResults(nil)
 	if len(got) != 0 {
 		t.Errorf("expected empty, got %d", len(got))
 	}

@@ -386,6 +386,12 @@ components:
           example:
             drafter: "gemini-1.5-pro"
             critic: "gemini-1.5-flash"
+        nigerian_flavor:
+          type: boolean
+          description: |
+            Controls whether the drafter injects Nigerian vernacular and localizes product
+            context (e.g. Amazon → Jumia, USD → NGN). Defaults to true when omitted.
+          default: true
 
     ExecutionTiming:
       type: object

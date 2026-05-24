@@ -16,9 +16,12 @@ func Drafter(model llm.LLMProvider) func(context.Context, AgentState) (AgentStat
 			return state, fmt.Errorf("user profile is missing")
 		}
 
-		localizedProduct := LocalizeContext(&state.TargetProduct)
+		product := state.TargetProduct
+		if state.NigerianFlavor {
+			product = LocalizeContext(&state.TargetProduct)
+		}
 
-		messages := buildDrafterPrompt(state.UserProfile, &localizedProduct, state.PredictedRating, state.CriticFeedback)
+		messages := buildDrafterPrompt(state.UserProfile, &product, state.PredictedRating, state.CriticFeedback, state.NigerianFlavor)
 
 		opts := []llm.CompletionOption{}
 		if m := state.ModelFor("drafter"); m != "" {
@@ -38,7 +41,7 @@ func Drafter(model llm.LLMProvider) func(context.Context, AgentState) (AgentStat
 }
 
 // buildDrafterPrompt constructs the prompt for generating a persona-driven review.
-func buildDrafterPrompt(profile *UserProfile, product *TargetProduct, rating float64, criticFeedback string) []llm.Message {
+func buildDrafterPrompt(profile *UserProfile, product *TargetProduct, rating float64, criticFeedback string, nigerian bool) []llm.Message {
 	// 1. Calculate hard word-count boundaries to prevent LLM rambling.
 	// We assume ReviewLength metrics are in characters. Avg word length is ~5 chars.
 	avgWords := profile.ReviewLength.AverageLength / 5
@@ -61,7 +64,18 @@ YOUR PREVIOUS DRAFT WAS REJECTED. You must fix these specific issues:
 	systemInstruction := `You are a forensic linguistic-mimicry engine. You do NOT write like an AI. You do NOT write helpful essays. 
 You act as a digital twin of a specific human internet user. You will adopt their exact tone, grammar flaws, capitalization habits, and regional slang.`
 
-	// 4. The main user prompt with strict XML-style structuring
+	// 4. Build optional Nigerian localization rule (rule 3 slot).
+	rule3 := ""
+	if nigerian {
+		rule3 = fmt.Sprintf(`
+3. NIGERIAN LOCALIZATION: You are simulating a Nigerian consumer. Based on their persona ("%s"), inject subtle Nigerian internet vernacular, references, or slang (e.g., 'Sapa', 'Omo', 'To be honest', 'They tried', 'Delivery was somehow'). Do not overdo it to the point of caricature, but make it undeniably Nigerian.`, profile.ConsumerPersona)
+	}
+	rule4Num, rule5Num := "4", "5"
+	if !nigerian {
+		rule4Num, rule5Num = "3", "4"
+	}
+
+	// 5. The main user prompt with strict XML-style structuring
 	userPrompt := fmt.Sprintf(`Generate a highly authentic product review mimicking the target user.
 
 <TARGET_RATING>
@@ -79,19 +93,20 @@ You MUST generate a review that reflects exactly %.1f stars.
 
 <STRICT_RULES_FOR_MIMICRY>
 1. LENGTH ENFORCEMENT: The user typically writes ~%d words. Your review MUST be strictly between %d and %d words. DO NOT EXCEED THIS.
-2. FORMATTING ENFORCEMENT: The user's capitalization style is "%s" and punctuation habit is "%s". You MUST copy this exact mechanical style. If their style is lowercase, use ZERO capital letters. If they use excessive exclamation marks, you must do the same.
-3. NIGERIAN LOCALIZATION: You are simulating a Nigerian consumer. Based on their persona ("%s"), inject subtle Nigerian internet vernacular, references, or slang (e.g., 'Sapa', 'Omo', 'To be honest', 'They tried', 'Delivery was somehow'). Do not overdo it to the point of caricature, but make it undeniably Nigerian.
-4. BANNED AI WORDS: You are strictly forbidden from using generic AI words like: "delve", "tapestry", "curate", "elevate", "seamless", "commendable", "pleasantly surprised".
-5. OUTPUT: Output ONLY the raw review text. No intro, no markdown, no quotation marks.
+2. FORMATTING ENFORCEMENT: The user's capitalization style is "%s" and punctuation habit is "%s". You MUST copy this exact mechanical style. If their style is lowercase, use ZERO capital letters. If they use excessive exclamation marks, you must do the same.%s
+%s. BANNED AI WORDS: You are strictly forbidden from using generic AI words like: "delve", "tapestry", "curate", "elevate", "seamless", "commendable", "pleasantly surprised".
+%s. OUTPUT: Output ONLY the raw review text. No intro, no markdown, no quotation marks.
 </STRICT_RULES_FOR_MIMICRY>`,
 		rating,
-		formatStructuredProfile(profile), // Assuming you have this helper function
-		formatStructuredProduct(product), // Assuming you have this helper function
+		formatStructuredProfile(profile),
+		formatStructuredProduct(product),
 		feedbackSection,
 		avgWords, minWords, maxWords,
 		profile.FormattingQuirks.CapitalizationStyle,
 		profile.FormattingQuirks.PunctuationHabits,
-		profile.ConsumerPersona,
+		rule3,
+		rule4Num,
+		rule5Num,
 	)
 
 	return []llm.Message{

@@ -16,7 +16,10 @@ type AgentState struct {
 	// Keys are node names: "profiler", "rater", "drafter", "critic".
 	// Values are model identifiers (e.g. "gpt-5.4-mini"). Empty means use provider default.
 	ModelOverrides map[string]string `json:"model_overrides"`
-	UserProfile    *UserProfile      `json:"user_profile"`
+	// NigerianFlavor controls whether the drafter injects Nigerian vernacular and localizes
+	// product details. Defaults to true (same behaviour as before the field existed).
+	NigerianFlavor bool         `json:"nigerian_flavor"`
+	UserProfile    *UserProfile `json:"user_profile"`
 
 	PredictedRating float64 `json:"predicted_rating"`
 	RatingReasoning string  `json:"rating_reasoning"`
