@@ -13,7 +13,7 @@ It handles two distinct tasks through one unified API:
 - **Task A** — Simulate a user's star rating and written review for an unseen item based on their history.
 - **Task B** — Conversational, context-aware recommendation with cold-start handling, cross-domain retrieval, and multi-turn dialogue.
 
-All outputs are post-processed through a Nigerian cultural humanizer so responses feel natural and grounded in everyday Nigerian life.
+By default, all outputs are post-processed through a Nigerian cultural humanizer so responses feel natural and grounded in everyday Nigerian life. Both endpoints accept `nigerian_flavor: false` to receive neutral English instead.
 
 ---
 
@@ -75,7 +75,7 @@ Stage 1 — Signal Extractor (LLM)
   ▼
 Stage 2 — Multi-vector Retrieval
   │  embed each search_query → pgvector HNSW cosine search (pool of 50)
-  │  union results, deduplicate by item_id and search_text
+  │  union results, deduplicate by search_text, resolved name, and entity fingerprint
   │  fallback → full-text search on intent phrase
   │
   ▼
@@ -172,13 +172,14 @@ Conversational recommendation. Pass a user persona and chat history; receive ran
 }
 ```
 
-| Field          | Type   | Required | Default         | Description                                                                               |
-| -------------- | ------ | -------- | --------------- | ----------------------------------------------------------------------------------------- |
-| `user_persona` | string | **yes**  | —               | Free-text description of the user.                                                        |
-| `history`      | array  | no       | `[]`            | Alternating `user`/`assistant` turns. Empty history triggers a clarifying question.       |
-| `cross_domain` | bool   | no       | `false`         | When `true`, LLM freely mixes categories (books, products, restaurants).                  |
-| `limit`        | int    | no       | `10`            | Max items to return (1–50).                                                               |
-| `provider`     | string | no       | first available | LLM backend: `"kimi"`, `"gemini"`, or `"openai"`. Falls back to any available if omitted. |
+| Field             | Type   | Required | Default         | Description                                                                                                               |
+| ----------------- | ------ | -------- | --------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `user_persona`    | string | **yes**  | —               | Free-text description of the user.                                                                                        |
+| `history`         | array  | no       | `[]`            | Alternating `user`/`assistant` turns. Empty history triggers a clarifying question.                                       |
+| `cross_domain`    | bool   | no       | `false`         | When `true`, LLM freely mixes categories (books, products, restaurants).                                                  |
+| `limit`           | int    | no       | `10`            | Max items to return (1–50).                                                                                               |
+| `provider`        | string | no       | first available | LLM backend: `"kimi"`, `"gemini"`, or `"openai"`. Falls back to any available if omitted.                                |
+| `nigerian_flavor` | bool   | no       | `true`          | When `true` (default), reasoning is humanized in Nigerian English. Set `false` for neutral warm English instead.          |
 
 **Normal response:**
 
@@ -469,6 +470,7 @@ mux.HandleFunc("POST /generate-review", handlers.GenerateReviewHandler(deps))
     "review_count": 152
   },
   "provider": "openai",
+  "nigerian_flavor": true,
   "model_overrides": {
     "profiler": "gpt-5.4-mini",
     "rater": "gpt-5.4",
@@ -479,6 +481,8 @@ mux.HandleFunc("POST /generate-review", handlers.GenerateReviewHandler(deps))
 ```
 
 `provider` is optional and defaults to `openai`. If the requested provider is not available in the current environment, the handler returns `400` with the list of available providers.
+
+`nigerian_flavor` is optional and defaults to `true`. When `true`, the Drafter localizes product context to Nigerian equivalents (Amazon → Jumia, USD → NGN, etc.) and injects Nigerian vernacular into the review. Set to `false` for a neutral, culturally generic review in standard English.
 
 **Optional per-node model overrides:**
 
@@ -542,8 +546,9 @@ POST /generate-review
               │
               ▼
 ┌──────────────────────────────┐
-│ Agent 3: Drafter             │ Localizes product context to Nigerian
-│                              │ settings, then drafts the review text
+│ Agent 3: Drafter             │ Optionally localizes product context to Nigerian
+│                              │ settings (controlled by nigerian_flavor), then
+│                              │ drafts the review text in the user's voice
 └─────────────┬────────────────┘
               │
               ▼
