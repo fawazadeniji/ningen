@@ -129,8 +129,9 @@ paths:
         3. **Drafter** — generates a written review matching the user's tone and style.
         4. **Critic loop** — evaluates and rewrites the draft until it passes quality checks (max 2 iterations).
 
-        The generated review is localized to Nigerian context (Jumia instead of Amazon,
-        Nigerian Naira, etc.) automatically.
+        By default the review is localized to Nigerian context (Jumia instead of Amazon,
+        NGN currency, etc.) and Nigerian vernacular is injected. Set `nigerian_flavor: false`
+        to receive a neutral, culturally generic review instead.
       operationId: generateReview
       requestBody:
         required: true
